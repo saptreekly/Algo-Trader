@@ -35,6 +35,7 @@ pub struct AdaptiveEngine {
     decay_rate: f64,
     candidate_thresholds: [f64; 5],
     regrets: [f64; 5],
+    prev_innovation: f64,
     tick_count: u64,
     internal_state: i8, // 0 = Flat, 1 = Long, -1 = Short
 }
@@ -72,6 +73,7 @@ impl AdaptiveEngine {
             decay_rate,
             candidate_thresholds: [0.3, 0.6, 1.0, 1.5, 2.0],
             regrets: [0.0; 5],
+            prev_innovation: 0.0,
             tick_count: 0,
             internal_state: 0,
         }
@@ -122,8 +124,9 @@ impl Strategy for AdaptiveEngine {
         // 2. Regret Matching for z_threshold tuning
         let std_dev = s.sqrt();
         let z = innovation / std_dev;
+        let delta_innovation = innovation - self.prev_innovation;
         
-        // Track regrets based on hypothetical PnL (innovation * direction)
+        // Track regrets based on hypothetical PnL
         for (i, &cand_z) in self.candidate_thresholds.iter().enumerate() {
             let active_z = self.z_threshold;
             
@@ -135,8 +138,8 @@ impl Strategy for AdaptiveEngine {
             let current_signal = get_hypo_signal(active_z);
             let cand_signal = get_hypo_signal(cand_z);
             
-            let hypo_pnl = cand_signal as f64 * innovation;
-            let active_pnl = current_signal as f64 * innovation;
+            let hypo_pnl = -(cand_signal as f64) * delta_innovation;
+            let active_pnl = -(current_signal as f64) * delta_innovation;
             
             self.regrets[i] += (hypo_pnl - active_pnl).max(0.0);
         }
@@ -197,13 +200,13 @@ impl Strategy for AdaptiveEngine {
 
         if eu_agg <= 0.0 && eu_pass <= 0.0 {
             self.internal_state = 0;
+            self.prev_innovation = innovation;
             return Signal::Hold;
         }
 
         let adjusted_z_threshold = self.z_threshold * (2.0 - q);
 
-        let z = innovation / std_dev;
-        match self.internal_state {
+        let signal_result = match self.internal_state {
             1 => {
                 if z >= 0.0 { self.internal_state = 0; Signal::Hold } else { Signal::Buy }
             }
@@ -215,6 +218,9 @@ impl Strategy for AdaptiveEngine {
                 else if z < -adjusted_z_threshold { self.internal_state = 1; Signal::Buy }
                 else { Signal::Hold }
             }
-        }
+        };
+        
+        self.prev_innovation = innovation;
+        signal_result
     }
 }
