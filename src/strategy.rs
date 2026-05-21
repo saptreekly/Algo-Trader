@@ -1,4 +1,4 @@
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum Signal {
     Buy,
     Sell,
@@ -204,8 +204,6 @@ impl Strategy for AdaptiveEngine {
             return Signal::Hold;
         }
 
-        let adjusted_z_threshold = self.z_threshold * (2.0 - q);
-
         let signal_result = match self.internal_state {
             1 => {
                 if z >= 0.0 { self.internal_state = 0; Signal::Hold } else { Signal::Buy }
@@ -214,11 +212,16 @@ impl Strategy for AdaptiveEngine {
                 if z <= 0.0 { self.internal_state = 0; Signal::Hold } else { Signal::Sell }
             }
             _ => {
-                if z > adjusted_z_threshold { self.internal_state = -1; Signal::Sell }
-                else if z < -adjusted_z_threshold { self.internal_state = 1; Signal::Buy }
+                if z > self.z_threshold { self.internal_state = -1; Signal::Sell }
+                else if z < -self.z_threshold { self.internal_state = 1; Signal::Buy }
                 else { Signal::Hold }
             }
         };
+
+        if signal_result != Signal::Hold {
+            let action = if q > 0.5 { "Aggressive Market Fill" } else { "Passive Limit Fill" };
+            println!("Engine recommends: {} for {:?}", action, signal_result);
+        }
         
         self.prev_innovation = innovation;
         signal_result
