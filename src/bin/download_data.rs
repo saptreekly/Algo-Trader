@@ -11,6 +11,7 @@ use std::fs;
 struct Bar {
     t: String, // Timestamp
     c: f64,    // Close
+    v: f64,    // Volume
     n: u64,    // Trade count
 }
 
@@ -78,19 +79,29 @@ async fn main() -> Result<(), Box<dyn Error>> {
     fs::create_dir_all("data")?;
     let file_path = "data/historical_pairs.csv";
     let mut wtr = Writer::from_path(file_path)?;
-    wtr.write_record(&["timestamp", "close_a", "close_b", "trade_count_a", "trade_count_b"])?;
+    wtr.write_record(&[
+        "timestamp",
+        "close_a",
+        "close_b",
+        "vol_a",
+        "vol_b",
+        "trade_count_a",
+        "trade_count_b",
+    ])?;
 
-    let map_b: HashMap<String, (f64, u64)> = bars_b
+    let map_b: HashMap<String, (f64, f64, u64)> = bars_b
         .iter()
-        .map(|b| (b.t.clone(), (b.c, b.n)))
+        .map(|b| (b.t.clone(), (b.c, b.v, b.n)))
         .collect();
 
     for bar_a in bars_a {
-        if let Some(&(close_b, n_b)) = map_b.get(&bar_a.t) {
+        if let Some(&(close_b, vol_b, n_b)) = map_b.get(&bar_a.t) {
             wtr.write_record(&[
                 &bar_a.t,
                 &bar_a.c.to_string(),
                 &close_b.to_string(),
+                &bar_a.v.to_string(),
+                &vol_b.to_string(),
                 &bar_a.n.to_string(),
                 &n_b.to_string(),
             ])?;

@@ -9,12 +9,34 @@ struct Row {
     timestamp: String,
     close_a: f64,
     close_b: f64,
+    vol_a: f64,
+    vol_b: f64,
     trade_count_a: u64,
     trade_count_b: u64,
 }
 
-fn run_simulation(rows: &[Row], win_spread: f64, loss_toxic: f64, size_threshold: f64) -> (f64, i32) {
-    let mut engine = AdaptiveEngine::with_parameters(win_spread, loss_toxic, size_threshold);
+fn run_simulation(
+    rows: &[Row],
+    q_alpha: f64,
+    q_beta: f64,
+    r_noise: f64,
+    z_threshold: f64,
+    loss_toxic: f64,
+    size_threshold: f64,
+) -> (f64, i32) {
+    if rows.is_empty() {
+        return (100_000.0, 0);
+    }
+
+    let mut engine = AdaptiveEngine::with_parameters(
+        q_alpha,
+        q_beta,
+        r_noise,
+        z_threshold,
+        loss_toxic,
+        size_threshold,
+    );
+    
     let mut balance = 100_000.0;
     let mut position_active = false;
     let mut entry_price_a = 0.0;
@@ -22,8 +44,15 @@ fn run_simulation(rows: &[Row], win_spread: f64, loss_toxic: f64, size_threshold
     let mut total_trades = 0;
 
     for row in rows {
-        // Use placeholder 0.0 for volume, but pass real trade counts
-        let signal = engine.on_tick(row.close_a, row.close_b, 0.0, 0.0, row.trade_count_a, row.trade_count_b);
+        // Strategy signal based on normalized prices and real volume data
+        let signal = engine.on_tick(
+            row.close_a,
+            row.close_b,
+            row.vol_a,
+            row.vol_b,
+            row.trade_count_a,
+            row.trade_count_b,
+        );
 
         match signal {
             Signal::Buy => {
@@ -53,26 +82,44 @@ fn main() -> Result<(), Box<dyn Error>> {
     let rows: Vec<Row> = rdr.deserialize().filter_map(Result::ok).collect();
 
     let mut best_balance = -1.0;
-    let mut best_params = (0.0, 0.0, 0.0);
+    let mut best_params = (0.0, 0.0, 0.0, 0.0);
     let mut best_trades = 0;
 
-    for &win_spread in &[1.0, 2.0, 3.0, 4.0, 5.0] {
-        for &loss_toxic in &[2.0, 4.0, 6.0, 8.0, 10.0] {
-            for &size_threshold in &[10.0, 30.0, 50.0, 70.0, 90.0] {
-                let (final_balance, total_trades) = run_simulation(&rows, win_spread, loss_toxic, size_threshold);
+    let r_noise = 0.0001;
+    let loss_toxic = 1.0;
+
+    let mut q_val = 0.000002;
+    while q_val <= 0.000022 {
+        let q_alpha = q_val;
+        let q_beta = q_val;
+
+        for &z_threshold in &[0.3, 0.5, 0.7, 1.0] {
+            for &size_threshold in &[500.0, 1000.0, 2000.0, 4000.0] {
+                let (final_balance, total_trades) = run_simulation(
+                    &rows,
+                    q_alpha,
+                    q_beta,
+                    r_noise,
+                    z_threshold,
+                    loss_toxic,
+                    size_threshold,
+                );
+                
                 if final_balance > best_balance {
                     best_balance = final_balance;
-                    best_params = (win_spread, loss_toxic, size_threshold);
+                    best_params = (q_val, z_threshold, size_threshold, loss_toxic);
                     best_trades = total_trades;
                 }
             }
         }
+        q_val += 0.000005;
     }
 
     println!("--- Optimization Report ---");
-    println!("Best Win Spread:      {:.2}", best_params.0);
-    println!("Best Toxic Loss:      {:.2}", best_params.1);
+    println!("Best Process Noise:   {:.6}", best_params.0);
+    println!("Best Z-Threshold:     {:.2}", best_params.1);
     println!("Best Size Threshold:  {:.2}", best_params.2);
+    println!("Best Loss Toxic:      {:.2}", best_params.3);
     println!("Max Achieved Balance: ${:.2}", best_balance);
     println!("Total Trades Executed: {}", best_trades);
 
