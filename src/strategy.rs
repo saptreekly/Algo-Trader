@@ -20,6 +20,15 @@ impl AdaptiveEngine {
         Self::default()
     }
 
+    pub fn with_parameters(process_noise: f64, measurement_noise: f64) -> Self {
+        Self {
+            state_estimate: 0.0,
+            error_covariance: 1.0,
+            process_noise,
+            measurement_noise,
+        }
+    }
+
     fn detect_regime(&self) -> bool {
         // High covariance indicates high uncertainty/volatility
         self.error_covariance > 0.5
