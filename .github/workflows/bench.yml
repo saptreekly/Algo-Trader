@@ -27,3 +27,5 @@ jobs:
           alert-threshold: '120%'
           comment-on-alert: true
           github-token: ${{ secrets.GITHUB_TOKEN }}
+          skip-fetch-gh-pages: true
+          auto-push: true

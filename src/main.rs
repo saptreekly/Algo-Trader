@@ -3,7 +3,7 @@ use std::env; // Added
 
 #[derive(Deserialize, Debug)]
 struct Account {
-    cash: String,
+cash: String,
     buying_power: String,
 }
 
