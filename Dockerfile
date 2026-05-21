@@ -7,7 +7,7 @@ RUN apt-get update && apt-get install -y pkg-config libssl-dev && rm -rf /var/li
 WORKDIR /app
 
 # Copy manifest files first for caching
-COPY Cargo.toml Cargo.lock ./
+COPY Cargo.toml Cargo.lock* ./
 # Pre-build dependencies to cache them
 RUN mkdir src && echo "fn main() {}" > src/main.rs
 RUN cargo build --release

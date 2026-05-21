@@ -2,6 +2,6 @@ services:
   app:
     build: .
     volumes:
-      - .:/app
+      - ./src:/app/src
     env_file:
       - .env

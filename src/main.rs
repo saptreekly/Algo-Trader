@@ -1,29 +1,40 @@
 mod strategy;
 
-use crate::strategy::{AdaptiveEngine, Strategy, Signal};
+use serde::Deserialize;
+use std::env;
+
+#[derive(Deserialize, Debug)]
+struct Account {
+    cash: String,
+    buying_power: String,
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     dotenvy::dotenv().ok();
-    
-    // Boilerplate setup
-    let mut engine = AdaptiveEngine::new();
-    
-    // Simulate incoming price stream
-    let simulated_prices = [100.0, 101.0, 102.0, 101.0, 100.0];
-    
-    println!("Starting Trading Loop...");
-    
-    for price in simulated_prices {
-        // Hot path: No heap allocations here
-        let signal = engine.on_tick(price);
-        
-        match signal {
-            Signal::Buy => println!("Price: {:.2} -> Signal: BUY", price),
-            Signal::Sell => println!("Price: {:.2} -> Signal: SELL", price),
-            Signal::Hold => println!("Price: {:.2} -> Signal: HOLD", price),
-        }
-    }
+
+    let api_key = env::var("ALPACA_API_KEY").expect("ALPACA_API_KEY must be set");
+    let secret_key = env::var("ALPACA_SECRET_KEY").expect("ALPACA_SECRET_KEY must be set");
+    let base_url = env::var("ALPACA_BASE_URL").unwrap_or_else(|_| "https://paper-api.alpaca.markets".to_string());
+
+    let client = reqwest::Client::new();
+    let account_url = format!("{}/v2/account", base_url.trim_end_matches("/v2"));
+
+    println!("Fetching Alpaca account status...");
+
+    let response = client
+        .get(account_url)
+        .header("APCA-API-KEY-ID", api_key)
+        .header("APCA-API-SECRET-KEY", secret_key)
+        .send()
+        .await?
+        .error_for_status()?;
+
+    let account: Account = response.json().await?;
+
+    println!("Successfully connected to Alpaca!");
+    println!("Cash Balance: ${}", account.cash);
+    println!("Buying Power: ${}", account.buying_power);
 
     Ok(())
 }
