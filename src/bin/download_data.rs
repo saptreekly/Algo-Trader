@@ -1,8 +1,8 @@
-use chrono::{Duration, Utc};
 use csv::Writer;
 use dotenvy::dotenv;
 use reqwest::header::{HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::env;
 use std::error::Error;
 use std::fs;
@@ -19,7 +19,7 @@ struct Bar {
 
 #[derive(Debug, Deserialize)]
 struct BarsResponse {
-    bars: std::collections::HashMap<String, Vec<Bar>>,
+    bars: HashMap<String, Vec<Bar>>,
 }
 
 #[tokio::main]
@@ -29,15 +29,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let api_key = env::var("APCA_API_KEY_ID")?;
     let api_secret = env::var("APCA_API_SECRET_KEY")?;
 
-    let symbol = "SPY";
-    let end_date = Utc::now();
-    let start_date = end_date - Duration::days(30);
+    let symbol = "AAPL";
+    let start = "2026-04-01T00:00:00Z";
+    let end = "2026-05-01T00:00:00Z";
 
     let url = format!(
-        "https://data.alpaca.markets/v2/stocks/bars?symbols={}&timeframe=1Min&start={}&end={}&limit=10000",
-        symbol,
-        start_date.to_rfc3339(),
-        end_date.to_rfc3339()
+        "https://data.alpaca.markets/v2/stocks/bars?symbols={}&timeframe=1Min&start={}&end={}&limit=1000",
+        symbol, start, end
     );
 
     let mut headers = HeaderMap::new();
