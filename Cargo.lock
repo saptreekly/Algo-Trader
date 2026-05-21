@@ -33,6 +33,7 @@ dependencies = [
  "csv",
  "dotenvy",
  "kalman_filters",
+ "rand",
  "reqwest",
  "serde",
  "serde_json",

@@ -44,10 +44,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     for (a, b) in PAIRS {
         let key = format!("{}_{}", a, b);
         let engine = match key.as_str() {
-            "AAPL_MSFT" => AdaptiveEngine::with_parameters(0.000002, 0.000002, 0.0001, 0.30, 1.00, 4000.00),
-            "NVDA_AMD" => AdaptiveEngine::with_parameters(0.000002, 0.000002, 0.0001, 0.60, 1.00, 4000.00),
-            "MSFT_NVDA" => AdaptiveEngine::with_parameters(0.000002, 0.000002, 0.0001, 0.30, 1.00, 1500.00),
-            _ => AdaptiveEngine::with_parameters(0.000002, 0.000002, 0.0001, 0.30, 1.00, 500.0), // Defensive kill-switch
+            "AAPL_MSFT" => AdaptiveEngine::with_parameters(0.000002, 0.000002, 0.0001, 0.30, 1.00, 4000.00, 0.1, 0.99),
+            "NVDA_AMD" => AdaptiveEngine::with_parameters(0.000002, 0.000002, 0.0001, 0.60, 1.00, 4000.00, 0.1, 0.99),
+            "MSFT_NVDA" => AdaptiveEngine::with_parameters(0.000002, 0.000002, 0.0001, 0.30, 1.00, 1500.00, 0.1, 0.99),
+            _ => AdaptiveEngine::with_parameters(0.000002, 0.000002, 0.0001, 0.30, 1.00, 500.0, 0.1, 0.99), // Defensive kill-switch
         };
         registry.insert(key.clone(), engine);
         states.insert(key, PositionState::Flat);

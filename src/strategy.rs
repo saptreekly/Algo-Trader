@@ -30,6 +30,12 @@ pub struct AdaptiveEngine {
     z_threshold: f64,
     loss_toxic: f64,
     size_threshold: f64,
+    p_toxic_prior: f64,
+    p_toxic_baseline: f64,
+    decay_rate: f64,
+    candidate_thresholds: [f64; 5],
+    regrets: [f64; 5],
+    tick_count: u64,
     internal_state: i8, // 0 = Flat, 1 = Long, -1 = Short
 }
 
@@ -45,6 +51,8 @@ impl AdaptiveEngine {
         z_threshold: f64,
         loss_toxic: f64,
         size_threshold: f64,
+        p_toxic_baseline: f64,
+        decay_rate: f64,
     ) -> Self {
         Self {
             alpha: 0.0,
@@ -59,6 +67,12 @@ impl AdaptiveEngine {
             z_threshold,
             loss_toxic,
             size_threshold,
+            p_toxic_prior: p_toxic_baseline,
+            p_toxic_baseline,
+            decay_rate,
+            candidate_thresholds: [0.3, 0.6, 1.0, 1.5, 2.0],
+            regrets: [0.0; 5],
+            tick_count: 0,
             internal_state: 0,
         }
     }
@@ -66,7 +80,7 @@ impl AdaptiveEngine {
 
 impl Default for AdaptiveEngine {
     fn default() -> Self {
-        Self::with_parameters(0.0001, 0.0001, 0.01, 2.0, 0.05, 100.0)
+        Self::with_parameters(0.0001, 0.0001, 0.01, 2.0, 0.05, 100.0, 0.1, 0.99)
     }
 }
 
@@ -80,6 +94,8 @@ impl Strategy for AdaptiveEngine {
         trades_a: u64,
         trades_b: u64,
     ) -> Signal {
+        self.tick_count += 1;
+
         // 1. Kalman Filter Update
         self.p00 += self.q_alpha;
         self.p11 += self.q_beta;
@@ -103,45 +119,100 @@ impl Strategy for AdaptiveEngine {
         self.p10 = new_p10;
         self.p11 = new_p11;
 
-        // 2. Game Theory Logic
+        // 2. Regret Matching for z_threshold tuning
+        let std_dev = s.sqrt();
+        let z = innovation / std_dev;
+        
+        // Track regrets based on hypothetical PnL (innovation * direction)
+        for (i, &cand_z) in self.candidate_thresholds.iter().enumerate() {
+            let active_z = self.z_threshold;
+            
+            // Calculate hypothetical signal
+            let get_hypo_signal = |z_val: f64| -> i8 {
+                if z > z_val { -1 } else if z < -z_val { 1 } else { 0 }
+            };
+            
+            let current_signal = get_hypo_signal(active_z);
+            let cand_signal = get_hypo_signal(cand_z);
+            
+            let hypo_pnl = cand_signal as f64 * innovation;
+            let active_pnl = current_signal as f64 * innovation;
+            
+            self.regrets[i] += (hypo_pnl - active_pnl).max(0.0);
+        }
+
+        // Periodic update
+        if self.tick_count % 100 == 0 {
+            let total_regret: f64 = self.regrets.iter().sum();
+            if total_regret > 0.0 {
+                let mut rng = rand::random::<f64>() * total_regret;
+                for (i, &regret) in self.regrets.iter().enumerate() {
+                    rng -= regret;
+                    if rng <= 0.0 {
+                        self.z_threshold = self.candidate_thresholds[i];
+                        break;
+                    }
+                }
+            }
+            // Reset regrets partially to allow adaptation
+            for r in self.regrets.iter_mut() { *r *= 0.5; }
+        }
+
+        // 3. Game Theory Logic (using updated z_threshold)
         let live_payoff = innovation.abs();
-        let avg_size_a = if trades_a > 0 {
-            vol_a / trades_a as f64
-        } else {
-            0.0
-        };
-        let avg_size_b = if trades_b > 0 {
-            vol_b / trades_b as f64
-        } else {
-            0.0
-        };
-        let p_toxic_a = (avg_size_a / self.size_threshold).min(1.0);
-        let p_toxic_b = (avg_size_b / self.size_threshold).min(1.0);
-        let p_toxic = p_toxic_a.max(p_toxic_b);
+        let avg_size_a = if trades_a > 0 { vol_a / trades_a as f64 } else { 0.0 };
+        let avg_size_b = if trades_b > 0 { vol_b / trades_b as f64 } else { 0.0 };
 
-        let payoff_passive = (1.0 - p_toxic) * live_payoff + p_toxic * (-self.loss_toxic);
-        let payoff_aggressive =
-            (1.0 - p_toxic) * (live_payoff * 0.5) + p_toxic * (-self.loss_toxic * 0.2);
+        let signal = (avg_size_a / self.size_threshold).max(avg_size_b / self.size_threshold).clamp(0.01, 0.99);
+        let likelihood_toxic = signal;
+        let likelihood_noise = 1.0 - signal;
 
-        if payoff_passive <= 0.0 && payoff_aggressive <= 0.0 {
+        let numerator = likelihood_toxic * self.p_toxic_prior;
+        let denominator = numerator + likelihood_noise * (1.0 - self.p_toxic_prior);
+        self.p_toxic_prior = numerator / denominator;
+        self.p_toxic_prior = self.p_toxic_prior * self.decay_rate + self.p_toxic_baseline * (1.0 - self.decay_rate);
+        
+        let p_toxic = self.p_toxic_prior;
+
+        let payoff_agg_noise = live_payoff;
+        let payoff_agg_toxic = (live_payoff * 0.2) - (self.loss_toxic * 0.5);
+        let payoff_pass_noise = live_payoff * 0.8;
+        let payoff_pass_toxic = -self.loss_toxic;
+
+        let market_payoff_agg_noise = -payoff_agg_noise;
+        let market_payoff_agg_toxic = -payoff_agg_toxic;
+        let market_payoff_pass_noise = -payoff_pass_noise;
+        let market_payoff_pass_toxic = -payoff_pass_toxic;
+
+        let eu_agg = p_toxic * payoff_agg_toxic + (1.0 - p_toxic) * payoff_agg_noise;
+        let eu_pass = p_toxic * payoff_pass_toxic + (1.0 - p_toxic) * payoff_pass_noise;
+
+        let denominator = market_payoff_agg_toxic - market_payoff_pass_toxic - market_payoff_agg_noise + market_payoff_pass_noise;
+        let q = if denominator.abs() > 1e-9 {
+            (market_payoff_pass_noise - market_payoff_pass_toxic) / denominator
+        } else {
+            0.5
+        };
+        let q = q.clamp(0.0, 1.0);
+
+        if eu_agg <= 0.0 && eu_pass <= 0.0 {
             self.internal_state = 0;
             return Signal::Hold;
         }
 
-        // 3. Directional Signal (Hysteresis Router)
-        let std_dev = s.sqrt();
-        let z = innovation / std_dev;
+        let adjusted_z_threshold = self.z_threshold * (2.0 - q);
 
+        let z = innovation / std_dev;
         match self.internal_state {
-            1 => { // We are currently holding a Long Spread position
+            1 => {
                 if z >= 0.0 { self.internal_state = 0; Signal::Hold } else { Signal::Buy }
             }
-            -1 => { // We are currently holding a Short Spread position
+            -1 => {
                 if z <= 0.0 { self.internal_state = 0; Signal::Hold } else { Signal::Sell }
             }
-            _ => { // We are currently Flat and searching for an extreme edge
-                if z > self.z_threshold { self.internal_state = -1; Signal::Sell }
-                else if z < -self.z_threshold { self.internal_state = 1; Signal::Buy }
+            _ => {
+                if z > adjusted_z_threshold { self.internal_state = -1; Signal::Sell }
+                else if z < -adjusted_z_threshold { self.internal_state = 1; Signal::Buy }
                 else { Signal::Hold }
             }
         }
