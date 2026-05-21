@@ -1,24 +1,25 @@
 pub enum Signal {
-    Buy,  // Spread too low: Long A, Short Beta * B
-    Sell, // Spread too high: Short A, Long Beta * B
+    Buy,
+    Sell,
     Hold,
 }
 
 pub trait Strategy {
-    fn on_tick(&mut self, price_a: f64, price_b: f64) -> Signal;
+    fn on_tick(
+        &mut self,
+        price_a: f64,
+        price_b: f64,
+        vol_a: f64,
+        vol_b: f64,
+        trades_a: u64,
+        trades_b: u64,
+    ) -> Signal;
 }
 
 pub struct AdaptiveEngine {
-    alpha: f64,
-    beta: f64,
-    p00: f64,
-    p01: f64,
-    p10: f64,
-    p11: f64,
-    q_alpha: f64,
-    q_beta: f64,
-    r_noise: f64,
-    z_threshold: f64,
+    win_spread: f64,
+    loss_toxic: f64,
+    size_threshold: f64,
 }
 
 impl AdaptiveEngine {
@@ -26,92 +27,59 @@ impl AdaptiveEngine {
         Self::default()
     }
 
-    pub fn with_parameters(q_alpha: f64, q_beta: f64, r_noise: f64, z_threshold: f64) -> Self {
+    pub fn with_parameters(win_spread: f64, loss_toxic: f64, size_threshold: f64) -> Self {
         Self {
-            alpha: 0.0,
-            beta: 1.0,
-            p00: 0.001,
-            p01: 0.0,
-            p10: 0.0,
-            p11: 0.001,
-            q_alpha,
-            q_beta,
-            r_noise,
-            z_threshold,
+            win_spread,
+            loss_toxic,
+            size_threshold,
         }
-    }
-
-    pub fn get_beta(&self) -> f64 {
-        self.beta
     }
 }
 
 impl Default for AdaptiveEngine {
     fn default() -> Self {
-        Self::with_parameters(0.0001, 0.0001, 0.01, 2.0)
+        Self::with_parameters(0.01, 0.05, 100.0)
     }
 }
 
 impl Strategy for AdaptiveEngine {
-    fn on_tick(&mut self, price_a: f64, price_b: f64) -> Signal {
-        // Prediction Step
-        self.p00 += self.q_alpha;
-        self.p11 += self.q_beta;
+    fn on_tick(
+        &mut self,
+        price_a: f64,
+        price_b: f64,
+        vol_a: f64,
+        _vol_b: f64,
+        trades_a: u64,
+        _trades_b: u64,
+    ) -> Signal {
+        let avg_size_a = if trades_a > 0 {
+            vol_a / trades_a as f64
+        } else {
+            0.0
+        };
 
-        // Innovation
-        let innovation = price_a - (self.alpha + self.beta * price_b);
+        let p_toxic = (avg_size_a / self.size_threshold).min(1.0);
 
-        // Innovation Variance (S = H*P*H^T + R)
-        let s = self.p00 + price_b * (self.p01 + self.p10 + price_b * self.p11) + self.r_noise;
+        let payoff_passive = (1.0 - p_toxic) * self.win_spread + p_toxic * (-self.loss_toxic);
+        let payoff_aggressive =
+            (1.0 - p_toxic) * (self.win_spread * 0.5) + p_toxic * (-self.loss_toxic * 0.2);
 
-        // Kalman Gain (K = P * H^T / S)
-        let k0 = (self.p00 + self.p01 * price_b) / s;
-        let k1 = (self.p10 + self.p11 * price_b) / s;
+        let spread = price_a - price_b;
 
-        // State Update
-        self.alpha += k0 * innovation;
-        self.beta += k1 * innovation;
-
-        // Covariance Matrix Update (P = (I - K * H) * P)
-        let m00 = 1.0 - k0;
-        let m01 = -k0 * price_b;
-        let m10 = -k1;
-        let m11 = 1.0 - k1 * price_b;
-
-        let new_p00 = m00 * self.p00 + m01 * self.p10;
-        let new_p01 = m00 * self.p01 + m01 * self.p11;
-        let new_p10 = m10 * self.p00 + m11 * self.p10;
-        let new_p11 = m10 * self.p01 + m11 * self.p11;
-
-        self.p00 = new_p00;
-        self.p01 = new_p01;
-        self.p10 = new_p10;
-        self.p11 = new_p11;
-
-        // Signal generation
-        let std_dev = s.sqrt();
-        if innovation > self.z_threshold * std_dev {
-            Signal::Sell
-        } else if innovation < -self.z_threshold * std_dev {
-            Signal::Buy
+        if payoff_passive > payoff_aggressive && payoff_passive > 0.0 {
+            if spread < 0.0 {
+                Signal::Buy
+            } else {
+                Signal::Sell
+            }
+        } else if payoff_aggressive > payoff_passive && payoff_aggressive > 0.0 {
+            if spread < 0.0 {
+                Signal::Buy
+            } else {
+                Signal::Sell
+            }
         } else {
             Signal::Hold
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_kalman_engine_updates_state() {
-        let mut engine = AdaptiveEngine::new();
-        let signal1 = engine.on_tick(100.0, 100.0);
-        assert!(matches!(signal1, Signal::Hold));
-
-        // Spread 105 - 100 = 5. Signal triggers based on innovation vs std_dev
-        let signal2 = engine.on_tick(105.0, 100.0);
-        assert!(matches!(signal2, Signal::Sell));
     }
 }
