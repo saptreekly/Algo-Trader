@@ -26,15 +26,14 @@ struct BarsResponse {
 async fn main() -> Result<(), Box<dyn Error>> {
     dotenv().ok();
 
-    let api_key = env::var("APCA_API_KEY_ID")?;
-    let api_secret = env::var("APCA_API_SECRET_KEY")?;
+    let api_key = env::var("ALPACA_API_KEY")?;
+    let api_secret = env::var("ALPACA_SECRET_KEY")?;
 
     let symbol = "AAPL";
-    let start = "2026-04-01T00:00:00Z";
-    let end = "2026-05-01T00:00:00Z";
-
+    let start = "2026-04-15T00:00:00Z";
+    let end = "2026-05-15T00:00:00Z";
     let url = format!(
-        "https://data.alpaca.markets/v2/stocks/bars?symbols={}&timeframe=1Min&start={}&end={}&limit=1000",
+        "https://data.alpaca.markets/v2/stocks/bars?symbols={}&timeframe=1Min&start={}&end={}&limit=1000&feed=sip",
         symbol, start, end
     );
 
