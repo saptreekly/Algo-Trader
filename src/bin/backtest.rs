@@ -1,7 +1,7 @@
 use algo_trader::strategy::{AdaptiveEngine, Signal, Strategy};
 use csv::Reader;
 use serde::Deserialize;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum PositionState {
@@ -14,27 +14,125 @@ enum PositionState {
 struct Row {
     #[allow(dead_code)]
     timestamp: String,
+    symbol: String,
     close: f64,
     vol: f64,
     trade_count: u64,
 }
 
+#[derive(Debug, Deserialize)]
+struct RawRow {
+    timestamp: String,
+    close: f64,
+    vol: f64,
+    trade_count: u64,
+}
+
+fn run_simulation(
+    pairs: &[( &str, &str)],
+    timeline: &BTreeMap<String, Vec<Row>>,
+    z_threshold: f64,
+    size_threshold: f64,
+    loss_toxic: f64,
+) -> HashMap<String, (f64, u64)> {
+    let mut results = HashMap::new();
+    let mut baselines: HashMap<String, (f64, f64)> = HashMap::new();
+    let mut states: HashMap<String, PositionState> = HashMap::new();
+    let mut balances: HashMap<String, f64> = HashMap::new();
+    let mut trade_counts: HashMap<String, u64> = HashMap::new();
+    let mut registry: HashMap<String, AdaptiveEngine> = HashMap::new();
+    let mut latest_prices: HashMap<String, (f64, f64, u64)> = HashMap::new();
+
+    for (a, b) in pairs {
+        let pair_key = format!("{}_{}", a, b);
+        registry.insert(pair_key.clone(), AdaptiveEngine::with_parameters(0.000002, 0.000002, 0.0001, z_threshold, loss_toxic, size_threshold));
+        states.insert(pair_key.clone(), PositionState::Flat);
+        balances.insert(pair_key.clone(), 100000.0 / 21.0);
+        trade_counts.insert(pair_key.clone(), 0);
+    }
+
+    for (_timestamp, rows_at_time) in timeline {
+        for row in rows_at_time {
+            latest_prices.insert(row.symbol.clone(), (row.close, row.vol, row.trade_count));
+        }
+
+        for (a, b) in pairs {
+            let pair_key = format!("{}_{}", a, b);
+            
+            if let (Some(data_a), Some(data_b)) = (latest_prices.get(*a), latest_prices.get(*b)) {
+                let baseline = baselines.entry(pair_key.clone()).or_insert((data_a.0, data_b.0));
+                
+                let norm_price_a = data_a.0 / baseline.0;
+                let norm_price_b = data_b.0 / baseline.1;
+                
+                let engine = registry.get_mut(&pair_key).unwrap();
+                let signal = engine.on_tick(
+                    norm_price_a,
+                    norm_price_b,
+                    data_a.1,
+                    data_b.1,
+                    data_a.2,
+                    data_b.2,
+                );
+                
+                let state = states.get_mut(&pair_key).unwrap();
+                let balance = balances.get_mut(&pair_key).unwrap();
+                let trades = trade_counts.get_mut(&pair_key).unwrap();
+                
+                match (*state, signal) {
+                    (PositionState::Flat, Signal::Buy) => {
+                        *state = PositionState::LongSpread;
+                        *trades += 1;
+                        *balance -= 0.02;
+                    }
+                    (PositionState::Flat, Signal::Sell) => {
+                        *state = PositionState::ShortSpread;
+                        *trades += 1;
+                        *balance -= 0.02;
+                    }
+                    (PositionState::LongSpread, Signal::Sell) => {
+                        *state = PositionState::Flat;
+                        *trades += 1;
+                        *balance -= 0.02;
+                        *balance += (norm_price_a - norm_price_b) * 1000.0;
+                    }
+                    (PositionState::ShortSpread, Signal::Buy) => {
+                        *state = PositionState::Flat;
+                        *trades += 1;
+                        *balance -= 0.02;
+                        *balance -= (norm_price_a - norm_price_b) * 1000.0;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    for (pair_key, balance) in balances {
+        results.insert(pair_key.clone(), (balance, trade_counts[&pair_key]));
+    }
+    results
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let assets = vec!["AAPL", "MSFT", "NVDA", "AMD", "GOOGL", "AMZN", "META"];
-    let mut data: HashMap<String, Vec<Row>> = HashMap::new();
+    let mut timeline: BTreeMap<String, Vec<Row>> = BTreeMap::new();
 
-    // 2. Load CSVs
     for asset in &assets {
         let path = format!("data/{}.csv", asset);
         let mut rdr = Reader::from_path(path)?;
-        let mut rows = Vec::new();
-        for result in rdr.deserialize() {
-            rows.push(result?);
+        for result in rdr.deserialize::<RawRow>() {
+            let raw: RawRow = result?;
+            timeline.entry(raw.timestamp.clone()).or_default().push(Row {
+                timestamp: raw.timestamp,
+                symbol: asset.to_string(),
+                close: raw.close,
+                vol: raw.vol,
+                trade_count: raw.trade_count,
+            });
         }
-        data.insert(asset.to_string(), rows);
     }
 
-    // 3. Pair Generation
     let mut pairs = Vec::new();
     for i in 0..assets.len() {
         for j in i + 1..assets.len() {
@@ -42,92 +140,42 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // 4. Instantiate Engines
-    let mut engines = HashMap::new();
-    let mut states = HashMap::new();
-    let mut balances = HashMap::new();
-    let mut trade_counts = HashMap::new();
+    let z_thresholds = vec![0.30, 0.60, 1.00, 1.50];
+    let size_thresholds = vec![500.0, 1500.0, 4000.0];
+    let loss_toxics = vec![1.0, 3.0];
+
+    let mut best_configs: HashMap<String, (f64, u64, f64, f64, f64)> = HashMap::new();
 
     for (a, b) in &pairs {
         let pair_key = format!("{}_{}", a, b);
-        let engine = AdaptiveEngine::with_parameters(0.000002, 0.30, 0.0001, 0.50, 1.00, 4000.00);
-        engines.insert(pair_key.clone(), engine);
-        states.insert(pair_key.clone(), PositionState::Flat);
-        balances.insert(pair_key.clone(), 100000.0 / 21.0); // Initial balance split
-        trade_counts.insert(pair_key.clone(), 0);
-    }
+        let mut best_balance = -f64::INFINITY;
+        let mut best_config = (0.0, 0, 0.0, 0.0, 0.0);
 
-    // 5. Chronological Loop
-    // Determine the minimum length across all assets to safely loop
-    let min_len = data.values().map(|v| v.len()).min().unwrap_or(0);
-    
-    for row_idx in 0..min_len {
-        for (a, b) in &pairs {
-            let pair_key = format!("{}_{}", a, b);
-            let row_a = &data[*a][row_idx];
-            let row_b = &data[*b][row_idx];
-
-            let engine = engines.get_mut(&pair_key).unwrap();
-            let signal = engine.on_tick(
-                row_a.close,
-                row_b.close,
-                row_a.vol,
-                row_b.vol,
-                row_a.trade_count,
-                row_b.trade_count,
-            );
-
-            let state = states.get_mut(&pair_key).unwrap();
-            let balance = balances.get_mut(&pair_key).unwrap();
-            let trades = trade_counts.get_mut(&pair_key).unwrap();
-
-            match (*state, signal) {
-                (PositionState::Flat, Signal::Buy) => {
-                    *state = PositionState::LongSpread;
-                    *trades += 1;
-                    *balance -= 0.02; // Slippage
+        for &z in &z_thresholds {
+            for &s in &size_thresholds {
+                for &l in &loss_toxics {
+                    let results = run_simulation(&[(a, b)], &timeline, z, s, l);
+                    let (balance, trades) = results[&pair_key];
+                    if balance > best_balance {
+                        best_balance = balance;
+                        best_config = (balance, trades, z, s, l);
+                    }
                 }
-                (PositionState::Flat, Signal::Sell) => {
-                    *state = PositionState::ShortSpread;
-                    *trades += 1;
-                    *balance -= 0.02; // Slippage
-                }
-                (PositionState::LongSpread, Signal::Sell) => {
-                    *state = PositionState::Flat;
-                    *trades += 1;
-                    *balance -= 0.02; // Slippage
-                    // Simple profit calc based on price diff
-                    *balance += row_a.close - row_b.close;
-                }
-                (PositionState::ShortSpread, Signal::Buy) => {
-                    *state = PositionState::Flat;
-                    *trades += 1;
-                    *balance -= 0.02; // Slippage
-                    // Simple profit calc
-                    *balance -= row_a.close - row_b.close;
-                }
-                _ => {}
             }
         }
+        best_configs.insert(pair_key, best_config);
     }
 
-    // 6. Terminal Summary
-    println!("Backtest Summary:");
-    let mut total_trades = 0;
-    let mut total_balance = 0.0;
-    let mut pair_profits = Vec::new();
-
-    for (pair_key, balance) in &balances {
-        total_balance += balance;
-        total_trades += trade_counts[pair_key];
-        pair_profits.push((pair_key, balance - (100000.0 / 21.0)));
+    println!("Optimization Report:");
+    let mut global_balance = 0.0;
+    for (pair_key, config) in best_configs {
+        let (balance, trades, z, s, _l) = config;
+        let pnl = balance - (100000.0 / 21.0);
+        global_balance += balance;
+        println!("Pair: {} | Optimal Z: {:.2} | Size Thresh: {:.1} | Total Trades: {} | Net PnL: ${:.2}", pair_key, z, s, trades, pnl);
     }
 
-    pair_profits.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
-
-    println!("Total Trades: {}", total_trades);
-    println!("Final Portfolio Balance: ${:.2}", total_balance);
-    println!("Top Pair: {} Profit: ${:.2}", pair_profits[0].0, pair_profits[0].1);
+    println!("Max Achieved Global Balance: ${:.2}", global_balance);
 
     Ok(())
 }

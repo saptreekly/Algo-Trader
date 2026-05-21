@@ -74,15 +74,16 @@ impl Strategy for AdaptiveEngine {
         price_a: f64,
         price_b: f64,
         vol_a: f64,
-        _vol_b: f64,
+        vol_b: f64,
         trades_a: u64,
-        _trades_b: u64,
+        trades_b: u64,
     ) -> Signal {
         // 1. Kalman Filter Update
         self.p00 += self.q_alpha;
         self.p11 += self.q_beta;
         let innovation = price_a - (self.alpha + self.beta * price_b);
-        let s = self.p00 + price_b * (self.p01 + self.p10 + price_b * self.p11) + self.r_noise;
+        let dynamic_r = self.r_noise * (1.0 + (vol_a + vol_b).ln_1p());
+        let s = self.p00 + price_b * (self.p01 + self.p10 + price_b * self.p11) + dynamic_r;
         let k0 = (self.p00 + self.p01 * price_b) / s;
         let k1 = (self.p10 + self.p11 * price_b) / s;
         self.alpha += k0 * innovation;
@@ -107,7 +108,15 @@ impl Strategy for AdaptiveEngine {
         } else {
             0.0
         };
-        let p_toxic = (avg_size_a / self.size_threshold).min(1.0);
+        let avg_size_b = if trades_b > 0 {
+            vol_b / trades_b as f64
+        } else {
+            0.0
+        };
+        let p_toxic_a = (avg_size_a / self.size_threshold).min(1.0);
+        let p_toxic_b = (avg_size_b / self.size_threshold).min(1.0);
+        let p_toxic = p_toxic_a.max(p_toxic_b);
+
         let payoff_passive = (1.0 - p_toxic) * live_payoff + p_toxic * (-self.loss_toxic);
         let payoff_aggressive =
             (1.0 - p_toxic) * (live_payoff * 0.5) + p_toxic * (-self.loss_toxic * 0.2);

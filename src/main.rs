@@ -25,7 +25,10 @@ enum PositionState {
     ShortSpread,
 }
 
-const PAIRS: &[(&str, &str)] = &[("AAPL", "MSFT"), ("NVDA", "AMD"), ("QQQ", "SPY")];
+const PAIRS: &[(&str, &str)] = &[
+    ("AAPL", "MSFT"), ("NVDA", "AMD"), ("MSFT", "NVDA"),
+    ("AAPL", "META"), ("MSFT", "META")
+];
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
@@ -40,7 +43,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     for (a, b) in PAIRS {
         let key = format!("{}_{}", a, b);
-        registry.insert(key.clone(), AdaptiveEngine::with_parameters(0.000002, 0.30, 0.0001, 0.50, 1.00, 4000.00));
+        let engine = match key.as_str() {
+            "AAPL_MSFT" => AdaptiveEngine::with_parameters(0.000002, 0.000002, 0.0001, 0.30, 1.00, 4000.00),
+            "NVDA_AMD" => AdaptiveEngine::with_parameters(0.000002, 0.000002, 0.0001, 0.60, 1.00, 4000.00),
+            "MSFT_NVDA" => AdaptiveEngine::with_parameters(0.000002, 0.000002, 0.0001, 0.30, 1.00, 1500.00),
+            _ => AdaptiveEngine::with_parameters(0.000002, 0.000002, 0.0001, 0.30, 1.00, 500.0), // Defensive kill-switch
+        };
+        registry.insert(key.clone(), engine);
         states.insert(key, PositionState::Flat);
     }
 
