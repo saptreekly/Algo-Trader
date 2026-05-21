@@ -12,6 +12,13 @@ struct Row {
 }
 
 fn run_simulation(rows: &[Row], q_alpha: f64, q_beta: f64, r_noise: f64, z_threshold: f64) -> (f64, i32) {
+    if rows.is_empty() {
+        return (100_000.0, 0);
+    }
+    
+    let initial_price_a = rows[0].close_a;
+    let initial_price_b = rows[0].close_b;
+
     let mut engine = AdaptiveEngine::with_parameters(q_alpha, q_beta, r_noise, z_threshold);
     let mut balance = 100_000.0;
     let mut position_active = false;
@@ -20,8 +27,10 @@ fn run_simulation(rows: &[Row], q_alpha: f64, q_beta: f64, r_noise: f64, z_thres
     let mut total_trades = 0;
 
     for row in rows {
+        let norm_price_a = row.close_a / initial_price_a;
+        let norm_price_b = row.close_b / initial_price_b;
         let current_beta = engine.get_beta(); 
-        let signal = engine.on_tick(row.close_a, row.close_b);
+        let signal = engine.on_tick(norm_price_a, norm_price_b);
 
         match signal {
             Signal::Buy => {
@@ -55,12 +64,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut best_params = (0.0, 0.0, 0.0, 0.0);
     let mut best_trades = 0;
 
-    let mut q_alpha = 0.0001;
-    while q_alpha <= 0.001 {
-        let mut q_beta = 0.0001;
-        while q_beta <= 0.001 {
-            let mut r_noise = 0.01;
-            while r_noise <= 0.10 {
+    let mut q_alpha = 0.000001;
+    while q_alpha <= 0.000010 {
+        let mut q_beta = 0.000001;
+        while q_beta <= 0.000010 {
+            let mut r_noise = 0.00001;
+            while r_noise <= 0.00020 {
                 for &z_threshold in &[0.5, 1.0, 1.5, 2.0] {
                     let (final_balance, total_trades) = run_simulation(&rows, q_alpha, q_beta, r_noise, z_threshold);
                     if final_balance > best_balance {
@@ -69,11 +78,11 @@ fn main() -> Result<(), Box<dyn Error>> {
                         best_trades = total_trades;
                     }
                 }
-                r_noise += 0.02;
+                r_noise += 0.00004;
             }
-            q_beta += 0.0002;
+            q_beta += 0.000002;
         }
-        q_alpha += 0.0002;
+        q_alpha += 0.000002;
     }
 
     println!("--- Optimization Report ---");

@@ -30,10 +30,10 @@ impl AdaptiveEngine {
         Self {
             alpha: 0.0,
             beta: 1.0,
-            p00: 1.0,
+            p00: 0.001,
             p01: 0.0,
             p10: 0.0,
-            p11: 1.0,
+            p11: 0.001,
             q_alpha,
             q_beta,
             r_noise,
