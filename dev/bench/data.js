@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1779351234934,
+  "lastUpdate": 1779351968445,
   "repoUrl": "https://github.com/saptreekly/Algo-Trader",
   "entries": {
     "Benchmark": [
@@ -148,6 +148,36 @@ window.BENCHMARK_DATA = {
           {
             "name": "on_tick_performance",
             "value": 8,
+            "range": "± 0",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "jweekly201@gmail.com",
+            "name": "saptreekly",
+            "username": "saptreekly"
+          },
+          "committer": {
+            "email": "jweekly201@gmail.com",
+            "name": "saptreekly",
+            "username": "saptreekly"
+          },
+          "distinct": true,
+          "id": "9ac7c90513747b4238dd8b04077579526118d1e6",
+          "message": "Refactor code structure for improved readability and maintainability",
+          "timestamp": "2026-05-21T20:25:26+12:00",
+          "tree_id": "a4ad6f0ad9d9a7634182712bdb6878953bf88020",
+          "url": "https://github.com/saptreekly/Algo-Trader/commit/9ac7c90513747b4238dd8b04077579526118d1e6"
+        },
+        "date": 1779351968430,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "on_tick_performance",
+            "value": 25,
             "range": "± 0",
             "unit": "ns/iter"
           }
