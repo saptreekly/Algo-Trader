@@ -1,0 +1,30 @@
+name: Docker Integration Test
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  docker-stress-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Docker Image
+        run: docker compose build
+
+      - name: Stress Test Connection
+        run: |
+          # Run the container multiple times in parallel to stress the API connection
+          echo "Starting stress test: running 10 concurrent requests..."
+          for i in {1..10}; do
+            docker compose run --rm app &
+          done
+          wait
+          echo "Stress test complete."
+        env:
+          ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+          ALPACA_BASE_URL: https://paper-api.alpaca.markets
