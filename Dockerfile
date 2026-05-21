@@ -9,7 +9,7 @@ WORKDIR /app
 # Copy manifest files first for caching
 COPY Cargo.toml Cargo.lock* ./
 # Pre-build dependencies to cache them
-RUN mkdir src && echo "fn main() {}" > src/main.rs
+RUN mkdir src benches && echo "fn main() {}" > src/main.rs && echo "fn main() {}" > benches/strategy_benchmarks.rs
 RUN cargo build --release
 
 # Copy source code

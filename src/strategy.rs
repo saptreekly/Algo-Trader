@@ -17,17 +17,23 @@ pub struct AdaptiveEngine {
 
 impl AdaptiveEngine {
     pub fn new() -> Self {
+        Self::default()
+    }
+
+    fn detect_regime(&self) -> bool {
+        // High covariance indicates high uncertainty/volatility
+        self.error_covariance > 0.5
+    }
+}
+
+impl Default for AdaptiveEngine {
+    fn default() -> Self {
         Self {
             state_estimate: 0.0,
             error_covariance: 1.0,
             process_noise: 0.01,
             measurement_noise: 0.1,
         }
-    }
-
-    fn detect_regime(&self) -> bool {
-        // High covariance indicates high uncertainty/volatility
-        self.error_covariance > 0.5
     }
 }
 
@@ -45,13 +51,13 @@ impl Strategy for AdaptiveEngine {
         // 2. Update Step
         // Calculate Kalman Gain: K = P / (P + R)
         let kalman_gain = self.error_covariance / (self.error_covariance + self.measurement_noise);
-        
+
         // Innovation: z - Hx (assuming H=1)
         let innovation = price - self.state_estimate;
-        
+
         // Update estimate
         self.state_estimate += kalman_gain * innovation;
-        
+
         // Update covariance: P = (1 - K) * P
         self.error_covariance *= 1.0 - kalman_gain;
 
@@ -65,7 +71,7 @@ impl Strategy for AdaptiveEngine {
         if innovation > 2.0 * std_dev {
             Signal::Sell // Price too high relative to estimate
         } else if innovation < -2.0 * std_dev {
-            Signal::Buy  // Price too low relative to estimate
+            Signal::Buy // Price too low relative to estimate
         } else {
             Signal::Hold
         }
@@ -82,8 +88,8 @@ mod tests {
         // First tick sets initial state
         let signal1 = engine.on_tick(100.0);
         assert!(matches!(signal1, Signal::Hold));
-        
-        // Innovation is 5. Standard deviation is sqrt(P) ~= 1.0. 
+
+        // Innovation is 5. Standard deviation is sqrt(P) ~= 1.0.
         // 5 > 2 * 1.0, so it triggers Sell.
         let signal2 = engine.on_tick(105.0);
         assert!(matches!(signal2, Signal::Sell));

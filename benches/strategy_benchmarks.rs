@@ -1,5 +1,5 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use algo_trader::strategy::{AdaptiveEngine, Strategy};
+use criterion::{black_box, criterion_group, criterion_main, Criterion};
 
 fn bench_on_tick(c: &mut Criterion) {
     let mut engine = AdaptiveEngine::new();

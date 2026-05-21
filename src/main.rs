@@ -1,9 +1,5 @@
-// mod strategy; // Removed, using lib.rs
-// use crate::strategy::{...} // Removed
-
 use serde::Deserialize;
-use std::env;
-use algo_trader::strategy::{AdaptiveEngine, Strategy, Signal}; // Added
+use std::env; // Added
 
 #[derive(Deserialize, Debug)]
 struct Account {
@@ -17,7 +13,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let api_key = env::var("ALPACA_API_KEY").expect("ALPACA_API_KEY must be set");
     let secret_key = env::var("ALPACA_SECRET_KEY").expect("ALPACA_SECRET_KEY must be set");
-    let base_url = env::var("ALPACA_BASE_URL").unwrap_or_else(|_| "https://paper-api.alpaca.markets".to_string());
+    let base_url = env::var("ALPACA_BASE_URL")
+        .unwrap_or_else(|_| "https://paper-api.alpaca.markets".to_string());
 
     let client = reqwest::Client::new();
     let account_url = format!("{}/v2/account", base_url.trim_end_matches("/v2"));
