@@ -89,38 +89,39 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 let norm_price_b = snap_b.latest_trade.p / baseline.1;
 
                 let engine = registry.get_mut(&pair_key).unwrap();
-                let signal = engine.on_tick(
+                let action = engine.on_tick(
                     norm_price_a,
                     norm_price_b,
                     snap_a.latest_trade.s,
                     snap_b.latest_trade.s,
                     1,
                     1,
+                    10000.0,
                 );
 
                 if tick_counter % 4 == 0 {
-                    println!("[Live Summary] Pair {} | State: {:?} | Signal: {:?}", pair_key, state, signal);
+                    println!("[Live Summary] Pair {} | State: {:?} | Signal: {:?}", pair_key, state, action.signal);
                 }
 
-                match signal {
+                match action.signal {
                     Signal::Buy => {
                         if *state == PositionState::Flat {
-                            println!("OPENING LONG SPREAD {} | SIGNAL: {:?}", pair_key, signal);
+                            println!("OPENING LONG SPREAD {} | SIGNAL: {:?}", pair_key, action.signal);
                             *state = PositionState::LongSpread;
                         }
                     }
                     Signal::Sell => {
                         if *state == PositionState::Flat {
-                            println!("OPENING SHORT SPREAD {} | SIGNAL: {:?}", pair_key, signal);
+                            println!("OPENING SHORT SPREAD {} | SIGNAL: {:?}", pair_key, action.signal);
                             *state = PositionState::ShortSpread;
                         }
                     }
                     Signal::Hold => {
                         if *state == PositionState::LongSpread {
-                             println!("CLOSING LONG SPREAD {} | SIGNAL: {:?}", pair_key, signal);
+                             println!("CLOSING LONG SPREAD {} | SIGNAL: {:?}", pair_key, action.signal);
                              *state = PositionState::Flat;
                         } else if *state == PositionState::ShortSpread {
-                             println!("CLOSING SHORT SPREAD {} | SIGNAL: {:?}", pair_key, signal);
+                             println!("CLOSING SHORT SPREAD {} | SIGNAL: {:?}", pair_key, action.signal);
                              *state = PositionState::Flat;
                         }
                     }

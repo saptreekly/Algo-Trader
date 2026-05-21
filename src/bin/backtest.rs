@@ -66,20 +66,21 @@ fn run_simulation(
                 let norm_price_b = data_b.0 / baseline.1;
                 
                 let engine = registry.get_mut(&pair_key).unwrap();
-                let signal = engine.on_tick(
+                let action = engine.on_tick(
                     norm_price_a,
                     norm_price_b,
                     data_a.1,
                     data_b.1,
                     data_a.2,
                     data_b.2,
+                    10000.0,
                 );
                 
                 let state = states.get_mut(&pair_key).unwrap();
                 let balance = balances.get_mut(&pair_key).unwrap();
                 let trades = trade_counts.get_mut(&pair_key).unwrap();
                 
-                match (*state, signal) {
+                match (*state, action.signal) {
                     (PositionState::Flat, Signal::Buy) => {
                         *state = PositionState::LongSpread;
                         *trades += 1;
