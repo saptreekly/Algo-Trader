@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1779350337966,
+  "lastUpdate": 1779350663433,
   "repoUrl": "https://github.com/saptreekly/Algo-Trader",
   "entries": {
     "Benchmark": [
@@ -53,6 +53,36 @@ window.BENCHMARK_DATA = {
           "url": "https://github.com/saptreekly/Algo-Trader/commit/5f59e33b025c45a38875a39508c69fd2fa603190"
         },
         "date": 1779350337951,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "on_tick_performance",
+            "value": 8,
+            "range": "± 0",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "jweekly201@gmail.com",
+            "name": "saptreekly",
+            "username": "saptreekly"
+          },
+          "committer": {
+            "email": "jweekly201@gmail.com",
+            "name": "saptreekly",
+            "username": "saptreekly"
+          },
+          "distinct": true,
+          "id": "9ab443f8ba19dbfab567623a6d83b17bcf315f38",
+          "message": "refactor: Update backtest logic to improve signal handling and optimize parameter search; adjust download_data for new date range",
+          "timestamp": "2026-05-21T20:03:49+12:00",
+          "tree_id": "17a05d607cf216472908ce2d9b21af0df2e72ea8",
+          "url": "https://github.com/saptreekly/Algo-Trader/commit/9ab443f8ba19dbfab567623a6d83b17bcf315f38"
+        },
+        "date": 1779350663415,
         "tool": "cargo",
         "benches": [
           {
