@@ -47,7 +47,7 @@ fn run_simulation(
         let pair_key = format!("{}_{}", a, b);
         registry.insert(pair_key.clone(), AdaptiveEngine::with_parameters(0.000002, 0.000002, 0.0001, z_threshold, loss_toxic, size_threshold));
         states.insert(pair_key.clone(), PositionState::Flat);
-        balances.insert(pair_key.clone(), 100000.0 / 21.0);
+        balances.insert(pair_key.clone(), 100.0 / 21.0);
         trade_counts.insert(pair_key.clone(), 0);
     }
 
@@ -170,7 +170,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut global_balance = 0.0;
     for (pair_key, config) in best_configs {
         let (balance, trades, z, s, _l) = config;
-        let pnl = balance - (100000.0 / 21.0);
+        let pnl = balance - (100.0 / 21.0);
         global_balance += balance;
         println!("Pair: {} | Optimal Z: {:.2} | Size Thresh: {:.1} | Total Trades: {} | Net PnL: ${:.2}", pair_key, z, s, trades, pnl);
     }

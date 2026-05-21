@@ -30,6 +30,7 @@ pub struct AdaptiveEngine {
     z_threshold: f64,
     loss_toxic: f64,
     size_threshold: f64,
+    internal_state: i8, // 0 = Flat, 1 = Long, -1 = Short
 }
 
 impl AdaptiveEngine {
@@ -58,6 +59,7 @@ impl AdaptiveEngine {
             z_threshold,
             loss_toxic,
             size_threshold,
+            internal_state: 0,
         }
     }
 }
@@ -122,17 +124,26 @@ impl Strategy for AdaptiveEngine {
             (1.0 - p_toxic) * (live_payoff * 0.5) + p_toxic * (-self.loss_toxic * 0.2);
 
         if payoff_passive <= 0.0 && payoff_aggressive <= 0.0 {
+            self.internal_state = 0;
             return Signal::Hold;
         }
 
-        // 3. Directional Signal
+        // 3. Directional Signal (Hysteresis Router)
         let std_dev = s.sqrt();
-        if innovation > self.z_threshold * std_dev {
-            Signal::Sell
-        } else if innovation < -self.z_threshold * std_dev {
-            Signal::Buy
-        } else {
-            Signal::Hold
+        let z = innovation / std_dev;
+
+        match self.internal_state {
+            1 => { // We are currently holding a Long Spread position
+                if z >= 0.0 { self.internal_state = 0; Signal::Hold } else { Signal::Buy }
+            }
+            -1 => { // We are currently holding a Short Spread position
+                if z <= 0.0 { self.internal_state = 0; Signal::Hold } else { Signal::Sell }
+            }
+            _ => { // We are currently Flat and searching for an extreme edge
+                if z > self.z_threshold { self.internal_state = -1; Signal::Sell }
+                else if z < -self.z_threshold { self.internal_state = 1; Signal::Buy }
+                else { Signal::Hold }
+            }
         }
     }
 }
