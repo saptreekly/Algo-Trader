@@ -1,18 +1,24 @@
 pub enum Signal {
-    Buy,
-    Sell,
+    Buy,  // Spread too low: Long A, Short Beta * B
+    Sell, // Spread too high: Short A, Long Beta * B
     Hold,
 }
 
 pub trait Strategy {
-    fn on_tick(&mut self, price: f64) -> Signal;
+    fn on_tick(&mut self, price_a: f64, price_b: f64) -> Signal;
 }
 
 pub struct AdaptiveEngine {
-    state_estimate: f64,
-    error_covariance: f64,
-    process_noise: f64,
-    measurement_noise: f64,
+    alpha: f64,
+    beta: f64,
+    p00: f64,
+    p01: f64,
+    p10: f64,
+    p11: f64,
+    q_alpha: f64,
+    q_beta: f64,
+    r_noise: f64,
+    z_threshold: f64,
 }
 
 impl AdaptiveEngine {
@@ -20,67 +26,74 @@ impl AdaptiveEngine {
         Self::default()
     }
 
-    pub fn with_parameters(process_noise: f64, measurement_noise: f64) -> Self {
+    pub fn with_parameters(q_alpha: f64, q_beta: f64, r_noise: f64, z_threshold: f64) -> Self {
         Self {
-            state_estimate: 0.0,
-            error_covariance: 1.0,
-            process_noise,
-            measurement_noise,
+            alpha: 0.0,
+            beta: 1.0,
+            p00: 1.0,
+            p01: 0.0,
+            p10: 0.0,
+            p11: 1.0,
+            q_alpha,
+            q_beta,
+            r_noise,
+            z_threshold,
         }
     }
 
-    fn detect_regime(&self) -> bool {
-        // High covariance indicates high uncertainty/volatility
-        self.error_covariance > 0.5
+    pub fn get_beta(&self) -> f64 {
+        self.beta
     }
 }
 
 impl Default for AdaptiveEngine {
     fn default() -> Self {
-        Self {
-            state_estimate: 0.0,
-            error_covariance: 1.0,
-            process_noise: 0.01,
-            measurement_noise: 0.1,
-        }
+        Self::with_parameters(0.0001, 0.0001, 0.01, 2.0)
     }
 }
 
 impl Strategy for AdaptiveEngine {
-    fn on_tick(&mut self, price: f64) -> Signal {
-        // Initialize estimate on first tick
-        if self.state_estimate == 0.0 {
-            self.state_estimate = price;
-        }
+    fn on_tick(&mut self, price_a: f64, price_b: f64) -> Signal {
+        // Prediction Step
+        self.p00 += self.q_alpha;
+        self.p11 += self.q_beta;
 
-        // 1. Prediction Step
-        // Predict next state estimate (no change expected) and increase uncertainty
-        self.error_covariance += self.process_noise;
+        // Innovation
+        let innovation = price_a - (self.alpha + self.beta * price_b);
 
-        // 2. Update Step
-        // Calculate Kalman Gain: K = P / (P + R)
-        let kalman_gain = self.error_covariance / (self.error_covariance + self.measurement_noise);
+        // Innovation Variance (S = H*P*H^T + R)
+        let s = self.p00 + price_b * (self.p01 + self.p10 + price_b * self.p11) + self.r_noise;
 
-        // Innovation: z - Hx (assuming H=1)
-        let innovation = price - self.state_estimate;
+        // Kalman Gain (K = P * H^T / S)
+        let k0 = (self.p00 + self.p01 * price_b) / s;
+        let k1 = (self.p10 + self.p11 * price_b) / s;
 
-        // Update estimate
-        self.state_estimate += kalman_gain * innovation;
+        // State Update
+        self.alpha += k0 * innovation;
+        self.beta += k1 * innovation;
 
-        // Update covariance: P = (1 - K) * P
-        self.error_covariance *= 1.0 - kalman_gain;
+        // Covariance Matrix Update (P = (I - K * H) * P)
+        let m00 = 1.0 - k0;
+        let m01 = -k0 * price_b;
+        let m10 = -k1;
+        let m11 = 1.0 - k1 * price_b;
 
-        // Regime detection
-        if self.detect_regime() {
-            return Signal::Hold;
-        }
+        let new_p00 = m00 * self.p00 + m01 * self.p10;
+        let new_p01 = m00 * self.p01 + m01 * self.p11;
+        let new_p10 = m10 * self.p00 + m11 * self.p10;
+        let new_p11 = m10 * self.p01 + m11 * self.p11;
 
-        // Signal generation: Mean reversion (Z-score > 2)
-        let std_dev = self.error_covariance.sqrt();
-        if innovation > 2.0 * std_dev {
-            Signal::Sell // Price too high relative to estimate
-        } else if innovation < -2.0 * std_dev {
-            Signal::Buy // Price too low relative to estimate
+        self.p00 = new_p00;
+        self.p01 = new_p01;
+        self.p10 = new_p10;
+        self.p11 = new_p11;
+
+        // Signal generation
+        let std_dev = s.sqrt();
+        if innovation > self.z_threshold * std_dev {
+            Signal::Sell
+        } else if innovation < -self.z_threshold * std_dev {
+            Signal::Buy
         } else {
             Signal::Hold
         }
@@ -94,13 +107,11 @@ mod tests {
     #[test]
     fn test_kalman_engine_updates_state() {
         let mut engine = AdaptiveEngine::new();
-        // First tick sets initial state
-        let signal1 = engine.on_tick(100.0);
+        let signal1 = engine.on_tick(100.0, 100.0);
         assert!(matches!(signal1, Signal::Hold));
 
-        // Innovation is 5. Standard deviation is sqrt(P) ~= 1.0.
-        // 5 > 2 * 1.0, so it triggers Sell.
-        let signal2 = engine.on_tick(105.0);
+        // Spread 105 - 100 = 5. Signal triggers based on innovation vs std_dev
+        let signal2 = engine.on_tick(105.0, 100.0);
         assert!(matches!(signal2, Signal::Sell));
     }
 }
