@@ -11,3 +11,10 @@ serde_json = "1.0"
 dotenvy = "0.15"
 algotrading = "0.1.0-alpha.2"
 kalman_filters = "1.0.1"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "strategy_benchmarks"
+harness = false

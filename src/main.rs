@@ -1,7 +1,9 @@
-mod strategy;
+// mod strategy; // Removed, using lib.rs
+// use crate::strategy::{...} // Removed
 
 use serde::Deserialize;
 use std::env;
+use algo_trader::strategy::{AdaptiveEngine, Strategy, Signal}; // Added
 
 #[derive(Deserialize, Debug)]
 struct Account {
