@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1779351968445,
+  "lastUpdate": 1779352463486,
   "repoUrl": "https://github.com/saptreekly/Algo-Trader",
   "entries": {
     "Benchmark": [
@@ -178,6 +178,36 @@ window.BENCHMARK_DATA = {
           {
             "name": "on_tick_performance",
             "value": 25,
+            "range": "± 0",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "jweekly201@gmail.com",
+            "name": "saptreekly",
+            "username": "saptreekly"
+          },
+          "committer": {
+            "email": "jweekly201@gmail.com",
+            "name": "saptreekly",
+            "username": "saptreekly"
+          },
+          "distinct": true,
+          "id": "80ed999d65578be03352d82d4551cee7c1d45c18",
+          "message": "refactor: Enhance run_simulation for better handling of empty rows and normalize prices; adjust AdaptiveEngine parameters for improved performance",
+          "timestamp": "2026-05-21T20:33:52+12:00",
+          "tree_id": "93f5176a5e6322726fde3a8dcbf21ba2d7d94c90",
+          "url": "https://github.com/saptreekly/Algo-Trader/commit/80ed999d65578be03352d82d4551cee7c1d45c18"
+        },
+        "date": 1779352463472,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "on_tick_performance",
+            "value": 26,
             "range": "± 0",
             "unit": "ns/iter"
           }
