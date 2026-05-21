@@ -29,7 +29,8 @@ pub struct AdaptiveEngine {
     r_noise: f64,
     z_threshold: f64,
     loss_toxic: f64,
-    size_threshold: f64,
+    rolling_size_a: f64,
+    rolling_size_b: f64,
     p_toxic_prior: f64,
     p_toxic_baseline: f64,
     decay_rate: f64,
@@ -51,7 +52,7 @@ impl AdaptiveEngine {
         r_noise: f64,
         z_threshold: f64,
         loss_toxic: f64,
-        size_threshold: f64,
+        initial_vol: f64,
         p_toxic_baseline: f64,
         decay_rate: f64,
     ) -> Self {
@@ -67,7 +68,8 @@ impl AdaptiveEngine {
             r_noise,
             z_threshold,
             loss_toxic,
-            size_threshold,
+            rolling_size_a: initial_vol,
+            rolling_size_b: initial_vol,
             p_toxic_prior: p_toxic_baseline,
             p_toxic_baseline,
             decay_rate,
@@ -160,44 +162,60 @@ impl Strategy for AdaptiveEngine {
             // Reset regrets partially to allow adaptation
             for r in self.regrets.iter_mut() { *r *= 0.5; }
         }
+// 3. Game Theory Logic (using updated z_threshold)
+let live_payoff = innovation.abs();
+let avg_size_a = if trades_a > 0 { vol_a / trades_a as f64 } else { 0.0 };
+let avg_size_b = if trades_b > 0 { vol_b / trades_b as f64 } else { 0.0 };
 
-        // 3. Game Theory Logic (using updated z_threshold)
-        let live_payoff = innovation.abs();
-        let avg_size_a = if trades_a > 0 { vol_a / trades_a as f64 } else { 0.0 };
-        let avg_size_b = if trades_b > 0 { vol_b / trades_b as f64 } else { 0.0 };
+// Update Dynamic Volume Baselines (EWMA)
+if avg_size_a > 0.0 {
+    self.rolling_size_a = (self.rolling_size_a * 0.99) + (avg_size_a * 0.01);
+}
+if avg_size_b > 0.0 {
+    self.rolling_size_b = (self.rolling_size_b * 0.99) + (avg_size_b * 0.01);
+}
 
-        let signal = (avg_size_a / self.size_threshold).max(avg_size_b / self.size_threshold).clamp(0.01, 0.99);
-        let likelihood_toxic = signal;
-        let likelihood_noise = 1.0 - signal;
+let dynamic_thresh_a = self.rolling_size_a * 3.0;
+let dynamic_thresh_b = self.rolling_size_b * 3.0;
 
-        let numerator = likelihood_toxic * self.p_toxic_prior;
-        let denominator = numerator + likelihood_noise * (1.0 - self.p_toxic_prior);
-        self.p_toxic_prior = numerator / denominator;
-        self.p_toxic_prior = self.p_toxic_prior * self.decay_rate + self.p_toxic_baseline * (1.0 - self.decay_rate);
-        
-        let p_toxic = self.p_toxic_prior;
+// Bayesian Signaling Update for Toxic Probability
+let signal = (avg_size_a / dynamic_thresh_a).max(avg_size_b / dynamic_thresh_b).clamp(0.01, 0.99);
+let likelihood_toxic = signal;
+let likelihood_noise = 1.0 - signal;
 
-        let payoff_agg_noise = live_payoff;
-        let payoff_agg_toxic = (live_payoff * 0.2) - (self.loss_toxic * 0.5);
-        let payoff_pass_noise = live_payoff * 0.8;
-        let payoff_pass_toxic = -self.loss_toxic;
+let numerator = likelihood_toxic * self.p_toxic_prior;
+let denominator = numerator + likelihood_noise * (1.0 - self.p_toxic_prior);
+self.p_toxic_prior = numerator / denominator;
+self.p_toxic_prior = self.p_toxic_prior * self.decay_rate + self.p_toxic_baseline * (1.0 - self.decay_rate);
 
-        let market_payoff_agg_noise = -payoff_agg_noise;
-        let market_payoff_agg_toxic = -payoff_agg_toxic;
-        let market_payoff_pass_noise = -payoff_pass_noise;
-        let market_payoff_pass_toxic = -payoff_pass_toxic;
+let p_toxic = self.p_toxic_prior;
 
-        let eu_agg = p_toxic * payoff_agg_toxic + (1.0 - p_toxic) * payoff_agg_noise;
-        let eu_pass = p_toxic * payoff_pass_toxic + (1.0 - p_toxic) * payoff_pass_noise;
+// Asymmetric Payoffs
+// innovation > 0: Shorting the spread (Short Squeeze risk -> higher toxic loss)
+// innovation < 0: Buying the spread (Panic liquidation -> lower toxic loss)
+let toxic_multiplier = if innovation > 0.0 { 1.5 } else { 0.8 };
+let effective_loss_toxic = self.loss_toxic * toxic_multiplier;
 
-        let denominator = market_payoff_agg_toxic - market_payoff_pass_toxic - market_payoff_agg_noise + market_payoff_pass_noise;
-        let q = if denominator.abs() > 1e-9 {
-            (market_payoff_pass_noise - market_payoff_pass_toxic) / denominator
-        } else {
-            0.5
-        };
-        let q = q.clamp(0.0, 1.0);
+let payoff_agg_noise = live_payoff;
+let payoff_agg_toxic = (live_payoff * 0.2) - (effective_loss_toxic * 0.5);
+let payoff_pass_noise = live_payoff * 0.8;
+let payoff_pass_toxic = -effective_loss_toxic;
 
+let market_payoff_agg_noise = -payoff_agg_noise;
+let market_payoff_agg_toxic = -payoff_agg_toxic;
+let market_payoff_pass_noise = -payoff_pass_noise;
+let market_payoff_pass_toxic = -payoff_pass_toxic;
+
+let eu_agg = p_toxic * payoff_agg_toxic + (1.0 - p_toxic) * payoff_agg_noise;
+let eu_pass = p_toxic * payoff_pass_toxic + (1.0 - p_toxic) * payoff_pass_noise;
+
+let denominator = market_payoff_agg_toxic - market_payoff_pass_toxic - market_payoff_agg_noise + market_payoff_pass_noise;
+let q = if denominator.abs() > 1e-9 {
+    (market_payoff_pass_noise - market_payoff_pass_toxic) / denominator
+} else {
+    0.5
+};
+let q = q.clamp(0.0, 1.0);
         if eu_agg <= 0.0 && eu_pass <= 0.0 {
             self.internal_state = 0;
             self.prev_innovation = innovation;
