@@ -15,6 +15,13 @@ struct Row {
     trade_count_b: u64,
 }
 
+#[derive(Debug, PartialEq, Clone, Copy)]
+enum PositionState {
+    Flat,
+    LongSpread,
+    ShortSpread,
+}
+
 fn run_simulation(
     rows: &[Row],
     q_alpha: f64,
@@ -38,7 +45,7 @@ fn run_simulation(
     );
     
     let mut balance = 100_000.0;
-    let mut position_active = false;
+    let mut state = PositionState::Flat;
     let mut entry_price_a = 0.0;
     let mut entry_price_b = 0.0;
     let mut total_trades = 0;
@@ -56,21 +63,32 @@ fn run_simulation(
 
         match signal {
             Signal::Buy => {
-                if !position_active {
-                    position_active = true;
+                if state == PositionState::Flat {
+                    state = PositionState::LongSpread;
                     entry_price_a = row.close_a;
                     entry_price_b = row.close_b;
                     total_trades += 1;
                 }
             }
             Signal::Sell => {
-                if position_active {
-                    position_active = false;
-                    let pnl = (row.close_a - entry_price_a) - (row.close_b - entry_price_b);
-                    balance += pnl;
+                if state == PositionState::Flat {
+                    state = PositionState::ShortSpread;
+                    entry_price_a = row.close_a;
+                    entry_price_b = row.close_b;
+                    total_trades += 1;
                 }
             }
-            Signal::Hold => {}
+            Signal::Hold => {
+                if state == PositionState::LongSpread {
+                    let pnl = (row.close_a - entry_price_a) - (row.close_b - entry_price_b) - 0.02;
+                    balance += pnl;
+                    state = PositionState::Flat;
+                } else if state == PositionState::ShortSpread {
+                    let pnl = (entry_price_a - row.close_a) - (entry_price_b - row.close_b) - 0.02;
+                    balance += pnl;
+                    state = PositionState::Flat;
+                }
+            }
         }
     }
     (balance, total_trades)

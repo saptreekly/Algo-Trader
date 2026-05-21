@@ -18,26 +18,38 @@ struct Snapshot {
     latest_trade: Trade,
 }
 
+#[derive(Debug, PartialEq, Clone, Copy)]
+enum PositionState {
+    Flat,
+    LongSpread,
+    ShortSpread,
+}
+
+const PAIRS: &[(&str, &str)] = &[("AAPL", "MSFT"), ("NVDA", "AMD"), ("QQQ", "SPY")];
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     dotenvy::dotenv().ok();
 
     let api_key = env::var("ALPACA_API_KEY").expect("ALPACA_API_KEY must be set");
     let secret_key = env::var("ALPACA_SECRET_KEY").expect("ALPACA_SECRET_KEY must be set");
-    let _base_url = env::var("ALPACA_BASE_URL")
-        .unwrap_or_else(|_| "https://paper-api.alpaca.markets".to_string());
 
-    // Optimized parameters
-    let mut engine = AdaptiveEngine::with_parameters(0.000002, 0.000002, 0.0001, 0.50, 1.00, 4000.00);
+    let mut registry: HashMap<String, AdaptiveEngine> = HashMap::new();
+    let mut baselines: HashMap<String, (f64, f64)> = HashMap::new();
+    let mut states: HashMap<String, PositionState> = HashMap::new();
+
+    for (a, b) in PAIRS {
+        let key = format!("{}_{}", a, b);
+        registry.insert(key.clone(), AdaptiveEngine::with_parameters(0.000002, 0.30, 0.0001, 0.50, 1.00, 4000.00));
+        states.insert(key, PositionState::Flat);
+    }
 
     let client = reqwest::Client::new();
-    let url = "https://data.alpaca.markets/v2/stocks/snapshots?symbols=AAPL,MSFT&feed=iex";
+    let url = "https://data.alpaca.markets/v2/stocks/snapshots?symbols=AAPL,MSFT,NVDA,AMD,QQQ,SPY&feed=iex";
 
     println!("Starting high-frequency trading loop...");
 
-    let mut position_active = false;
-    let mut initial_price_a: Option<f64> = None;
-    let mut initial_price_b: Option<f64> = None;
+    let mut tick_counter: u64 = 0;
 
     loop {
         let response = client
@@ -48,52 +60,62 @@ async fn main() -> Result<(), Box<dyn Error>> {
             .await?;
         
         if !response.status().is_success() {
-            let status = response.status();
-            let error_text = response.text().await?;
-            println!("API Request Failed: Status {}, Body: {}", status, error_text);
+            println!("API Request Failed: Status {}", response.status());
             sleep(Duration::from_millis(250)).await;
             continue;
         }
 
         let snapshots: HashMap<String, Snapshot> = response.json().await?;
 
-        if let (Some(snap_a), Some(snap_b)) = (snapshots.get("AAPL"), snapshots.get("MSFT")) {
-            if initial_price_a.is_none() || initial_price_b.is_none() {
-                initial_price_a = Some(snap_a.latest_trade.p);
-                initial_price_b = Some(snap_b.latest_trade.p);
-                println!("Baseline prices set: AAPL={:.2}, MSFT={:.2}", snap_a.latest_trade.p, snap_b.latest_trade.p);
-                sleep(Duration::from_millis(250)).await;
-                continue;
-            }
+        tick_counter += 1;
 
-            let norm_price_a = snap_a.latest_trade.p / initial_price_a.unwrap();
-            let norm_price_b = snap_b.latest_trade.p / initial_price_b.unwrap();
+        for (a, b) in PAIRS {
+            let pair_key = format!("{}_{}", a, b);
+            
+            if let (Some(snap_a), Some(snap_b)) = (snapshots.get(*a), snapshots.get(*b)) {
+                let baseline = baselines.entry(pair_key.clone()).or_insert((snap_a.latest_trade.p, snap_b.latest_trade.p));
+                let state = states.get_mut(&pair_key).unwrap();
 
-            let signal = engine.on_tick(
-                norm_price_a,
-                norm_price_b,
-                snap_a.latest_trade.s,
-                snap_b.latest_trade.s,
-                1, // Discrete tick
-                1, // Discrete tick
-            );
+                let norm_price_a = snap_a.latest_trade.p / baseline.0;
+                let norm_price_b = snap_b.latest_trade.p / baseline.1;
 
-            match signal {
-                Signal::Buy => {
-                    if !position_active {
-                        println!("LIVE SIGNAL DETECTED: BUY SPREAD - OPENING ORDER FLIGHT");
-                        // Order execution logic ...
-                        position_active = true;
+                let engine = registry.get_mut(&pair_key).unwrap();
+                let signal = engine.on_tick(
+                    norm_price_a,
+                    norm_price_b,
+                    snap_a.latest_trade.s,
+                    snap_b.latest_trade.s,
+                    1,
+                    1,
+                );
+
+                if tick_counter % 4 == 0 {
+                    println!("[Live Summary] Pair {} | State: {:?} | Signal: {:?}", pair_key, state, signal);
+                }
+
+                match signal {
+                    Signal::Buy => {
+                        if *state == PositionState::Flat {
+                            println!("OPENING LONG SPREAD {} | SIGNAL: {:?}", pair_key, signal);
+                            *state = PositionState::LongSpread;
+                        }
+                    }
+                    Signal::Sell => {
+                        if *state == PositionState::Flat {
+                            println!("OPENING SHORT SPREAD {} | SIGNAL: {:?}", pair_key, signal);
+                            *state = PositionState::ShortSpread;
+                        }
+                    }
+                    Signal::Hold => {
+                        if *state == PositionState::LongSpread {
+                             println!("CLOSING LONG SPREAD {} | SIGNAL: {:?}", pair_key, signal);
+                             *state = PositionState::Flat;
+                        } else if *state == PositionState::ShortSpread {
+                             println!("CLOSING SHORT SPREAD {} | SIGNAL: {:?}", pair_key, signal);
+                             *state = PositionState::Flat;
+                        }
                     }
                 }
-                Signal::Sell => {
-                    if position_active {
-                        println!("LIVE SIGNAL DETECTED: SELL SPREAD - OPENING ORDER FLIGHT");
-                        // Order execution logic ...
-                        position_active = false;
-                    }
-                }
-                Signal::Hold => {}
             }
         }
 
