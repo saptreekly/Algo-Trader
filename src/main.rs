@@ -1,6 +1,5 @@
 use algo_trader::strategy::{AdaptiveEngine, Signal, Strategy};
 use serde::Deserialize;
-use serde_json;
 use std::collections::HashMap;
 use std::env;
 use std::error::Error;
@@ -9,21 +8,14 @@ use tokio::time::sleep;
 
 #[derive(Deserialize, Debug, Clone)]
 struct Trade {
-    #[serde(alias = "p")]
-    p: f64, // Price
-    #[serde(alias = "s")]
-    s: f64, // Size (Volume)
+    p: f64,
+    s: f64,
 }
 
 #[derive(Deserialize, Debug, Clone)]
 struct Snapshot {
-    #[serde(alias = "latestTrade", alias = "latest_trade")]
+    #[serde(rename = "latestTrade")]
     latest_trade: Trade,
-}
-
-#[derive(Deserialize, Debug)]
-struct SnapshotResponse {
-    snapshots: HashMap<String, Snapshot>,
 }
 
 #[tokio::main]
@@ -63,17 +55,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
             continue;
         }
 
-        let body = response.text().await?;
-        let snap_response: SnapshotResponse = match serde_json::from_str(&body) {
-            Ok(r) => r,
-            Err(e) => {
-                println!("Deserialization Failed: {}, Body: {}", e, body);
-                sleep(Duration::from_millis(250)).await;
-                continue;
-            }
-        };
+        let snapshots: HashMap<String, Snapshot> = response.json().await?;
 
-        if let (Some(snap_a), Some(snap_b)) = (snap_response.snapshots.get("AAPL"), snap_response.snapshots.get("MSFT")) {
+        if let (Some(snap_a), Some(snap_b)) = (snapshots.get("AAPL"), snapshots.get("MSFT")) {
             if initial_price_a.is_none() || initial_price_b.is_none() {
                 initial_price_a = Some(snap_a.latest_trade.p);
                 initial_price_b = Some(snap_b.latest_trade.p);
