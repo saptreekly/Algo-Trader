@@ -21,15 +21,17 @@ struct BarsResponse {
     next_page_token: Option<String>,
 }
 
-async fn fetch_bars_paginated(
+async fn fetch_bars(
     symbol: &str,
     api_key: &str,
     api_secret: &str,
 ) -> Result<Vec<Bar>, Box<dyn Error>> {
     let mut all_bars = Vec::new();
     let mut next_page_token: Option<String> = None;
-    let start = "2026-03-01T00:00:00Z";
-    let end = "2026-05-15T00:00:00Z";
+    
+    // For demonstration, fetch a small recent range if not specified
+    let start = "2026-05-20T09:30:00Z";
+    let end = "2026-05-22T16:00:00Z";
 
     let client = reqwest::Client::new();
     let mut headers = HeaderMap::new();
@@ -38,7 +40,7 @@ async fn fetch_bars_paginated(
 
     loop {
         let mut url = format!(
-            "https://data.alpaca.markets/v2/stocks/bars?symbols={}&timeframe=1Min&start={}&end={}&limit=10000&feed=sip",
+            "https://data.alpaca.markets/v2/stocks/bars?symbols={}&timeframe=1Min&start={}&end={}&limit=1000&feed=iex",
             symbol, start, end
         );
         if let Some(token) = &next_page_token {
@@ -49,15 +51,23 @@ async fn fetch_bars_paginated(
             .get(&url)
             .headers(headers.clone())
             .send()
-            .await?
-            .json::<BarsResponse>()
             .await?;
+        
+        let status = response.status();
+        let body_text = response.text().await?;
+        
+        if !status.is_success() {
+            return Err(format!("API error: status {}, body: {}", status, body_text).into());
+        }
 
-        if let Some(bars) = response.bars.get(symbol) {
+        let bars_response: BarsResponse = serde_json::from_str(&body_text)
+            .map_err(|e| format!("Failed to parse JSON: {}, body: {}", e, body_text))?;
+
+        if let Some(bars) = bars_response.bars.get(symbol) {
             all_bars.extend(bars.clone());
         }
 
-        next_page_token = response.next_page_token;
+        next_page_token = bars_response.next_page_token;
         if next_page_token.is_none() {
             break;
         }
@@ -70,45 +80,32 @@ async fn fetch_bars_paginated(
 async fn main() -> Result<(), Box<dyn Error>> {
     dotenv().ok();
 
-    let api_key = env::var("ALPACA_API_KEY")?;
-    let api_secret = env::var("ALPACA_SECRET_KEY")?;
+    let api_key = env::var("ALPACA_API_KEY").expect("ALPACA_API_KEY must be set");
+    let api_secret = env::var("ALPACA_SECRET_KEY").expect("ALPACA_SECRET_KEY must be set");
 
-    let bars_a = fetch_bars_paginated("AAPL", &api_key, &api_secret).await?;
-    let bars_b = fetch_bars_paginated("MSFT", &api_key, &api_secret).await?;
+    let assets = vec!["AAPL", "MSFT", "NVDA", "AMD", "GOOGL", "AMZN", "META"];
 
     fs::create_dir_all("data")?;
-    let file_path = "data/historical_pairs.csv";
-    let mut wtr = Writer::from_path(file_path)?;
-    wtr.write_record(&[
-        "timestamp",
-        "close_a",
-        "close_b",
-        "vol_a",
-        "vol_b",
-        "trade_count_a",
-        "trade_count_b",
-    ])?;
 
-    let map_b: HashMap<String, (f64, f64, u64)> = bars_b
-        .iter()
-        .map(|b| (b.t.clone(), (b.c, b.v, b.n)))
-        .collect();
+    for asset in assets {
+        println!("Fetching data for {}", asset);
+        let bars = fetch_bars(asset, &api_key, &api_secret).await?;
+        
+        let file_path = format!("data/{}.csv", asset);
+        let mut wtr = Writer::from_path(&file_path)?;
+        wtr.write_record(&["timestamp", "close", "vol", "trade_count"])?;
 
-    for bar_a in bars_a {
-        if let Some(&(close_b, vol_b, n_b)) = map_b.get(&bar_a.t) {
+        for bar in bars {
             wtr.write_record(&[
-                &bar_a.t,
-                &bar_a.c.to_string(),
-                &close_b.to_string(),
-                &bar_a.v.to_string(),
-                &vol_b.to_string(),
-                &bar_a.n.to_string(),
-                &n_b.to_string(),
+                &bar.t,
+                &bar.c.to_string(),
+                &bar.v.to_string(),
+                &bar.n.to_string(),
             ])?;
         }
+        wtr.flush()?;
+        println!("Saved data for {} to {}", asset, file_path);
     }
-    wtr.flush()?;
-    println!("Successfully saved aligned pairs to {}", file_path);
 
     Ok(())
 }
