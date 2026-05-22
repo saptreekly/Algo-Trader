@@ -1,7 +1,10 @@
+use std::collections::VecDeque;
+
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum Signal {
     Buy,
     Sell,
+    Close,
     Hold,
 }
 
@@ -15,8 +18,6 @@ pub struct Action {
 pub trait Strategy {
     fn on_tick(
         &mut self,
-        norm_price_a: f64,
-        norm_price_b: f64,
         raw_price_a: f64,
         raw_price_b: f64,
         vol_a: f64,
@@ -34,6 +35,10 @@ pub struct AdaptiveEngine {
     p01: f64,
     p10: f64,
     p11: f64,
+    q_alpha: f64,
+    q_beta: f64,
+    rolling_variance: f64,
+    innovation_history: VecDeque<f64>,
     r_noise: f64,
     z_threshold: f64,
     loss_toxic: f64,
@@ -44,9 +49,12 @@ pub struct AdaptiveEngine {
     decay_rate: f64,
     candidate_thresholds: [f64; 5],
     regrets: [f64; 5],
+    virtual_states: [i8; 5],
+    virtual_entries: [f64; 5],
     prev_innovation: f64,
     tick_count: u64,
     internal_state: i8, // 0 = Flat, 1 = Long, -1 = Short
+    excursion_lock: bool,
 }
 
 impl AdaptiveEngine {
@@ -69,6 +77,10 @@ impl AdaptiveEngine {
             p01: 0.0,
             p10: 0.0,
             p11: 0.001,
+            q_alpha: 0.00001,
+            q_beta: 0.00001,
+            rolling_variance: 0.01,
+            innovation_history: VecDeque::with_capacity(100),
             r_noise,
             z_threshold,
             loss_toxic,
@@ -77,11 +89,14 @@ impl AdaptiveEngine {
             p_toxic_prior: p_toxic_baseline,
             p_toxic_baseline,
             decay_rate,
-            candidate_thresholds: [0.3, 0.6, 1.0, 1.5, 2.0],
+            candidate_thresholds: [1.0, 1.5, 2.0, 2.5, 3.0],
             regrets: [0.0; 5],
+            virtual_states: [0; 5],
+            virtual_entries: [0.0; 5],
             prev_innovation: 0.0,
             tick_count: 0,
             internal_state: 0,
+            excursion_lock: false,
         }
     }
 }
@@ -95,8 +110,6 @@ impl Default for AdaptiveEngine {
 impl Strategy for AdaptiveEngine {
     fn on_tick(
         &mut self,
-        _norm_price_a: f64,
-        _norm_price_b: f64,
         raw_price_a: f64,
         raw_price_b: f64,
         vol_a: f64,
@@ -107,10 +120,15 @@ impl Strategy for AdaptiveEngine {
     ) -> Action {
         self.tick_count += 1;
 
+        // Apply Process Noise
+        self.p00 += self.q_alpha;
+        self.p11 += self.q_beta;
+
         let available_buying_power = account_balance * 2.0;
         let max_shares = (available_buying_power / 2.0) / (raw_price_a + raw_price_b);
+        let position_value = max_shares * (raw_price_a + raw_price_b);
 
-        if max_shares < 1.0 {
+        if position_value < 1.0 {
             self.internal_state = 0;
             self.prev_innovation = 0.0;
             return Action { signal: Signal::Hold, size: 0.0, execution_slippage: 0.0 };
@@ -118,6 +136,35 @@ impl Strategy for AdaptiveEngine {
 
         // 1. Kalman Filter Update
         let innovation = raw_price_a - (self.alpha + self.beta * raw_price_b);
+        
+        // EWMA Variance Tracking for Z-Score
+        self.rolling_variance = (self.rolling_variance * 0.995) + (innovation * innovation * 0.005);
+        let statistical_std_dev = self.rolling_variance.sqrt().max(1e-6);
+        let z = innovation / statistical_std_dev;
+
+        // Reset Lock on Re-entry
+        if z.abs() <= self.z_threshold { self.excursion_lock = false; }
+
+        // Update history and stationarity check
+        self.innovation_history.push_back(innovation);
+        if self.innovation_history.len() > 100 {
+            self.innovation_history.pop_front();
+        }
+
+        let mut variance_ratio = 1.0;
+        if self.innovation_history.len() >= 100 {
+            let n = self.innovation_history.len();
+            let v1: f64 = self.innovation_history.iter()
+                .zip(self.innovation_history.iter().skip(1))
+                .map(|(a, b)| (a - b).powi(2)).sum::<f64>() / (n - 1) as f64;
+            
+            let v5: f64 = self.innovation_history.iter()
+                .zip(self.innovation_history.iter().skip(5))
+                .map(|(a, b)| (a - b).powi(2)).sum::<f64>() / (5.0 * (n - 5) as f64);
+            
+            variance_ratio = v5 / (5.0 * v1);
+        }
+
         let dynamic_r = self.r_noise * (1.0 + (vol_a + vol_b).ln_1p());
         let s = self.p00 + raw_price_b * (self.p01 + self.p10 + raw_price_b * self.p11) + dynamic_r;
         let k0 = (self.p00 + self.p01 * raw_price_b) / s;
@@ -137,27 +184,38 @@ impl Strategy for AdaptiveEngine {
         self.p10 = new_p10;
         self.p11 = new_p11;
 
-        // 2. Regret Matching for z_threshold tuning
-        let std_dev = s.sqrt();
-        let z = innovation / std_dev;
-        let delta_innovation = innovation - self.prev_innovation;
-        
-        // Track regrets based on hypothetical PnL
+        // 2. Regret Matching with Virtual Positions
+        let raw_spread = raw_price_a - raw_price_b;
+        let friction_cost = 0.00015;
+
         for (i, &cand_z) in self.candidate_thresholds.iter().enumerate() {
-            let active_z = self.z_threshold;
-
-            // Calculate hypothetical signal
-            let get_hypo_signal = |z_val: f64| -> i8 {
-                if z > z_val { -1 } else if z < -z_val { 1 } else { 0 }
-            };
-
-            let current_signal = get_hypo_signal(active_z);
-            let cand_signal = get_hypo_signal(cand_z);
-
-            let hypo_pnl = (cand_signal as f64) * delta_innovation;
-            let active_pnl = (current_signal as f64) * delta_innovation;
-
-            self.regrets[i] += (hypo_pnl - active_pnl).max(0.0);
+            match self.virtual_states[i] {
+                0 => {
+                    if z > cand_z {
+                        self.virtual_states[i] = -1; // Trigger Short
+                        self.virtual_entries[i] = raw_spread;
+                    } else if z < -cand_z {
+                        self.virtual_states[i] = 1; // Trigger Long
+                        self.virtual_entries[i] = raw_spread;
+                    }
+                }
+                1 => { // Long
+                    if z >= 0.0 {
+                        let realized_pnl = raw_spread - self.virtual_entries[i];
+                        self.regrets[i] += realized_pnl - friction_cost;
+                        self.virtual_states[i] = 0;
+                    }
+                }
+                -1 => { // Short
+                    if z <= 0.0 {
+                        let realized_pnl = self.virtual_entries[i] - raw_spread;
+                        self.regrets[i] += realized_pnl - friction_cost;
+                        self.virtual_states[i] = 0;
+                    }
+                }
+                _ => {}
+            }
+            self.regrets[i] = self.regrets[i].max(0.0);
         }
 
         // Periodic update
@@ -178,16 +236,16 @@ impl Strategy for AdaptiveEngine {
         }
 
         // 3. Game Theory Logic (using updated z_threshold)
-        let live_payoff = innovation.abs();
+        let expected_reversion_payoff = z.abs() * statistical_std_dev;
         let avg_size_a = if trades_a > 0 { vol_a / trades_a as f64 } else { 0.0 };
         let avg_size_b = if trades_b > 0 { vol_b / trades_b as f64 } else { 0.0 };
 
         // Update Dynamic Volume Baselines (EWMA)
         if avg_size_a > 0.0 {
-            self.rolling_size_a = (self.rolling_size_a * 0.99) + (avg_size_a * 0.01);
+            self.rolling_size_a = (self.rolling_size_a * 0.999) + (avg_size_a * 0.001);
         }
         if avg_size_b > 0.0 {
-            self.rolling_size_b = (self.rolling_size_b * 0.99) + (avg_size_b * 0.01);
+            self.rolling_size_b = (self.rolling_size_b * 0.999) + (avg_size_b * 0.001);
         }
 
         let dynamic_thresh_a = self.rolling_size_a * 3.0;
@@ -209,12 +267,11 @@ impl Strategy for AdaptiveEngine {
         let toxic_multiplier = if innovation > 0.0 { 1.5 } else { 0.8 };
         let effective_loss_toxic = self.loss_toxic * toxic_multiplier;
 
-        let friction_cost = 0.00015;
         let passive_friction = friction_cost * 0.5;
 
-        let payoff_agg_noise = live_payoff - friction_cost;
-        let payoff_agg_toxic = (live_payoff * 0.2) - (effective_loss_toxic * 0.5) - friction_cost;
-        let payoff_pass_noise = (live_payoff * 0.8) - passive_friction;
+        let payoff_agg_noise = expected_reversion_payoff - friction_cost;
+        let payoff_agg_toxic = (expected_reversion_payoff * 0.2) - (effective_loss_toxic * 0.5) - friction_cost;
+        let payoff_pass_noise = (expected_reversion_payoff * 0.8) - passive_friction;
         let payoff_pass_toxic = -effective_loss_toxic - passive_friction;
 
         let market_payoff_agg_noise = -payoff_agg_noise;
@@ -240,13 +297,17 @@ impl Strategy for AdaptiveEngine {
 
         let signal_result = match self.internal_state {
             1 => {
-                if z >= 0.0 { self.internal_state = 0; Signal::Hold } else { Signal::Buy }
+                if z >= 0.0 { self.internal_state = 0; Signal::Close } else { Signal::Hold }
             }
             -1 => {
-                if z <= 0.0 { self.internal_state = 0; Signal::Hold } else { Signal::Sell }
+                if z <= 0.0 { self.internal_state = 0; Signal::Close } else { Signal::Hold }
             }
             _ => {
-                if z > self.z_threshold { self.internal_state = -1; Signal::Sell }
+                if self.innovation_history.len() >= 100 && variance_ratio > 0.75 {
+                    self.internal_state = 0;
+                    Signal::Hold
+                } else if self.excursion_lock { Signal::Hold }
+                else if z > self.z_threshold { self.internal_state = -1; Signal::Sell }
                 else if z < -self.z_threshold { self.internal_state = 1; Signal::Buy }
                 else { Signal::Hold }
             }
@@ -255,12 +316,13 @@ impl Strategy for AdaptiveEngine {
         let mut final_signal = signal_result;
         let mut slippage = 0.0;
         
-        if signal_result != Signal::Hold {
+        if signal_result != Signal::Hold && signal_result != Signal::Close {
             if q <= 0.5 { // Passive attempt
                 let fill_prob = if p_toxic < 0.3 { 0.4 } else { 0.85 };
                 if rand::random::<f64>() > fill_prob {
                     final_signal = Signal::Hold;
                     self.internal_state = 0; // REVERT STATE
+                    self.excursion_lock = true;
                 } else if p_toxic >= 0.3 {
                     slippage = 0.0001;
                 }

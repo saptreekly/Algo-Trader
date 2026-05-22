@@ -36,7 +36,6 @@ fn run_simulation(
     loss_toxic: f64,
 ) -> HashMap<String, (f64, u64)> {
     let mut results = HashMap::new();
-    let mut baselines: HashMap<String, (f64, f64)> = HashMap::new();
     let mut states: HashMap<String, PositionState> = HashMap::new();
     let mut balances: HashMap<String, f64> = HashMap::new();
     let mut trade_counts: HashMap<String, u64> = HashMap::new();
@@ -62,15 +61,8 @@ fn run_simulation(
             let pair_key = format!("{}_{}", a, b);
             
             if let (Some(data_a), Some(data_b)) = (latest_prices.get(*a), latest_prices.get(*b)) {
-                let baseline = baselines.entry(pair_key.clone()).or_insert((data_a.0, data_b.0));
-                
-                let norm_price_a = data_a.0 / baseline.0;
-                let norm_price_b = data_b.0 / baseline.1;
-                
                 let engine = registry.get_mut(&pair_key).unwrap();
                 let action = engine.on_tick(
-                    norm_price_a,
-                    norm_price_b,
                     data_a.0,
                     data_b.0,
                     data_a.1,
@@ -95,7 +87,7 @@ fn run_simulation(
                         *trades += 1;
                         entry_spreads.insert(pair_key.clone(), data_a.0 - data_b.0);
                     }
-                    (PositionState::LongSpread, Signal::Sell) => {
+                    (PositionState::LongSpread, Signal::Close) => {
                         let entry_spread = entry_spreads[&pair_key];
                         let pnl = ((data_a.0 - data_b.0) - entry_spread) * action.size;
                         let round_trip_slippage_cost = action.execution_slippage * (data_a.0 + data_b.0) * action.size;
@@ -103,7 +95,7 @@ fn run_simulation(
                         *state = PositionState::Flat;
                         *trades += 1;
                     }
-                    (PositionState::ShortSpread, Signal::Buy) => {
+                    (PositionState::ShortSpread, Signal::Close) => {
                         let entry_spread = entry_spreads[&pair_key];
                         let pnl = (entry_spread - (data_a.0 - data_b.0)) * action.size;
                         let round_trip_slippage_cost = action.execution_slippage * (data_a.0 + data_b.0) * action.size;

@@ -30,6 +30,8 @@ const PAIRS: &[(&str, &str)] = &[
     ("AAPL", "META"), ("MSFT", "META")
 ];
 
+const ANNUAL_BORROW_RATE: f64 = 0.010;
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     dotenvy::dotenv().ok();
@@ -38,7 +40,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let secret_key = env::var("ALPACA_SECRET_KEY").expect("ALPACA_SECRET_KEY must be set");
 
     let mut registry: HashMap<String, AdaptiveEngine> = HashMap::new();
-    let mut baselines: HashMap<String, (f64, f64)> = HashMap::new();
     let mut states: HashMap<String, PositionState> = HashMap::new();
 
     for (a, b) in PAIRS {
@@ -83,19 +84,27 @@ async fn main() -> Result<(), Box<dyn Error>> {
             let pair_key = format!("{}_{}", a, b);
             
             if let (Some(snap_a), Some(snap_b)) = (snapshots.get(*a), snapshots.get(*b)) {
-                let baseline = baselines.entry(pair_key.clone()).or_insert((snap_a.latest_trade.p, snap_b.latest_trade.p));
                 let state = states.get_mut(&pair_key).unwrap();
 
-                let norm_price_a = snap_a.latest_trade.p / baseline.0;
-                let norm_price_b = snap_b.latest_trade.p / baseline.1;
                 let raw_price_a = snap_a.latest_trade.p;
                 let raw_price_b = snap_b.latest_trade.p;
                 let current_spread = raw_price_a - raw_price_b;
 
+                // Borrow cost calculation
+                let mut short_leg_value = 0.0;
+                match *state {
+                    PositionState::LongSpread { entry_spread: _ } => { short_leg_value = raw_price_b; }
+                    PositionState::ShortSpread { entry_spread: _ } => { short_leg_value = raw_price_a; }
+                    _ => {}
+                }
+                
+                if short_leg_value > 0.0 {
+                    let tick_borrow_cost = short_leg_value * (ANNUAL_BORROW_RATE / 3_931_200.0);
+                    active_portfolio_balance -= tick_borrow_cost;
+                }
+
                 let engine = registry.get_mut(&pair_key).unwrap();
                 let action = engine.on_tick(
-                    norm_price_a,
-                    norm_price_b,
                     raw_price_a,
                     raw_price_b,
                     snap_a.latest_trade.s,
@@ -113,6 +122,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     Signal::Buy => {
                         if let PositionState::Flat = *state {
                             if action.size > 0.0 {
+                                let total_slippage_cost = action.execution_slippage * (raw_price_a + raw_price_b) * action.size;
+                                active_portfolio_balance -= total_slippage_cost;
                                 println!("OPENING LONG SPREAD {} | SIGNAL: {:?}", pair_key, action.signal);
                                 *state = PositionState::LongSpread { entry_spread: current_spread };
                             }
@@ -121,12 +132,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     Signal::Sell => {
                         if let PositionState::Flat = *state {
                             if action.size > 0.0 {
+                                let total_slippage_cost = action.execution_slippage * (raw_price_a + raw_price_b) * action.size;
+                                active_portfolio_balance -= total_slippage_cost;
                                 println!("OPENING SHORT SPREAD {} | SIGNAL: {:?}", pair_key, action.signal);
                                 *state = PositionState::ShortSpread { entry_spread: current_spread };
                             }
                         }
                     }
-                    Signal::Hold => {
+                    Signal::Close => {
                         match *state {
                             PositionState::LongSpread { entry_spread } => {
                                 let pnl = (current_spread - entry_spread) * action.size;
@@ -145,6 +158,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             _ => {}
                         }
                     }
+                    Signal::Hold => {}
                 }
             }
         }
