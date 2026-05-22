@@ -2,7 +2,7 @@ use serde::Deserialize;
 use std::error::Error;
 use std::fs::File;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct HistoricalQuote {
     pub timestamp: String, // Or use chrono::DateTime<Utc> if preferred
     pub symbol: String,

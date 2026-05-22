@@ -48,6 +48,7 @@ pub struct AdaptiveEngine {
     p_toxic_prior: f64,
     p_toxic_baseline: f64,
     decay_rate: f64,
+    ticks_in_trade: u64,
     candidate_thresholds: [f64; 5],
     regrets: [f64; 5],
     virtual_states: [i8; 5],
@@ -91,12 +92,13 @@ impl AdaptiveEngine {
             p_toxic_prior: p_toxic_baseline,
             p_toxic_baseline,
             decay_rate,
-            candidate_thresholds: [1.0, 1.5, 2.0, 2.5, 3.0],
+            candidate_thresholds: [2.0, 2.5, 3.0, 3.5, 4.0],
             regrets: [0.0; 5],
             virtual_states: [0; 5],
             virtual_entries: [0.0; 5],
             prev_innovation: 0.0,
             tick_count: 0,
+            ticks_in_trade: 0,
             internal_state: 0,
             excursion_lock: false,
         }
@@ -105,7 +107,7 @@ impl AdaptiveEngine {
 
 impl Default for AdaptiveEngine {
     fn default() -> Self {
-        Self::with_parameters(0.01, 2.0, 0.05, 100.0, 0.1, 0.99)
+        Self::with_parameters(0.01, 2.5, 0.05, 100.0, 0.1, 0.99)
     }
 }
 
@@ -123,6 +125,12 @@ impl Strategy for AdaptiveEngine {
     ) -> Action {
         self.tick_count += 1;
         self.internal_state = current_position_state;
+
+        if self.internal_state != 0 {
+            self.ticks_in_trade += 1;
+        } else {
+            self.ticks_in_trade = 0;
+        }
 
         // Apply Process Noise
         self.p00 += self.q_alpha;
@@ -265,6 +273,8 @@ impl Strategy for AdaptiveEngine {
 
         // 3. Game Theory Logic (using updated z_threshold)
         let expected_reversion_payoff = z.abs() * statistical_std_dev;
+        let round_trip_cost = (raw_price_a + raw_price_b) * 0.0003;
+        
         let avg_size_a = if trades_a > 0 { vol_a / trades_a as f64 } else { 0.0 };
         let avg_size_b = if trades_b > 0 { vol_b / trades_b as f64 } else { 0.0 };
 
@@ -324,16 +334,17 @@ impl Strategy for AdaptiveEngine {
 
         let signal_result = match self.internal_state {
             1 => {
-                if z >= 0.0 { self.internal_state = 0; Signal::Close } else { Signal::Hold }
+                if self.ticks_in_trade > 5 && z >= 0.5 { self.internal_state = 0; Signal::Close } else { Signal::Hold }
             }
             -1 => {
-                if z <= 0.0 { self.internal_state = 0; Signal::Close } else { Signal::Hold }
+                if self.ticks_in_trade > 5 && z <= -0.5 { self.internal_state = 0; Signal::Close } else { Signal::Hold }
             }
             _ => {
                 if self.innovation_history.len() >= 100 && variance_ratio > 0.75 {
                     self.internal_state = 0;
                     Signal::Hold
                 } else if self.excursion_lock { Signal::Hold }
+                else if expected_reversion_payoff <= round_trip_cost * 1.5 { Signal::Hold }
                 else if z > self.z_threshold { self.internal_state = -1; Signal::Sell }
                 else if z < -self.z_threshold { self.internal_state = 1; Signal::Buy }
                 else { Signal::Hold }
