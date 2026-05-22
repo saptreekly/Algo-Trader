@@ -4,22 +4,6 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-tokio = { version = "1", features = ["full"] }
-reqwest = { version = "0.11", features = ["json"] }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-dotenvy = "0.15"
-algotrading = "0.1.0-alpha.2"
-kalman_filters = "1.0.1"
-csv = "1.3"
-chrono = { version = "0.4", features = ["serde"] }
+dfdx = "0.13.0"
 rand = "0.8"
-tokio-tungstenite = { version = "0.29.0", features = ["native-tls"] }
-futures-util = "0.3.32"
-
-[dev-dependencies]
-criterion = { version = "0.5", features = ["html_reports"] }
-
-[[bench]]
-name = "strategy_benchmarks"
-harness = false
+chrono = "0.4"
