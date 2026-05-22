@@ -3,13 +3,15 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::env;
 use std::error::Error;
-use std::time::Duration;
-use tokio::time::sleep;
+use futures_util::{SinkExt, StreamExt};
+use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
+use serde_json::json;
 
 #[derive(Deserialize, Debug, Clone)]
 struct Trade {
     p: f64,
     s: f64,
+    t: String,
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -41,6 +43,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let mut registry: HashMap<String, AdaptiveEngine> = HashMap::new();
     let mut states: HashMap<String, PositionState> = HashMap::new();
+    let mut snapshots: HashMap<String, Snapshot> = HashMap::new();
+    let mut last_trade_timestamps: HashMap<String, (String, String)> = HashMap::new();
 
     for (a, b) in PAIRS {
         let key = format!("{}_{}", a, b);
@@ -51,8 +55,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
             _ => AdaptiveEngine::with_parameters(0.0001, 0.30, 1.00, 500.0, 0.1, 0.99),
         };
         registry.insert(key.clone(), engine);
-        states.insert(key, PositionState::Flat);
+        states.insert(key.clone(), PositionState::Flat);
+        last_trade_timestamps.insert(key, ("".to_string(), "".to_string()));
     }
+
+    let url = "wss://stream.data.alpaca.markets/v2/iex";
+    let (mut ws_stream, _) = connect_async(url).await.expect("Failed to connect to Alpaca WebSocket");
+
+    ws_stream.send(Message::Text(json!({
+        "action": "auth", "key": api_key, "secret": secret_key
+    }).to_string().into())).await?;
 
     let mut unique_symbols = std::collections::HashSet::new();
     for &(asset_a, asset_b) in PAIRS {
@@ -62,40 +74,32 @@ async fn main() -> Result<(), Box<dyn Error>> {
     unique_symbols.insert("QQQ");
     unique_symbols.insert("SPY");
 
-    let symbols_query: String = unique_symbols
-        .into_iter()
-        .collect::<Vec<&str>>()
-        .join(",");
+    ws_stream.send(Message::Text(json!({
+        "action": "subscribe", "trades": unique_symbols
+    }).to_string().into())).await?;
 
-    let client = reqwest::Client::new();
-    let url = format!(
-        "https://data.alpaca.markets/v2/stocks/snapshots?symbols={}&feed=iex",
-        symbols_query
-    );
-
-    println!("Starting high-frequency trading loop...");
-
-    let mut tick_counter: u64 = 0;
     let mut active_portfolio_balance = 2500.0;
+    let mut tick_counter: u64 = 0;
 
-    loop {
-        let response = client
-            .get(&url)
-            .header("APCA-API-KEY-ID", &api_key)
-            .header("APCA-API-SECRET-KEY", &secret_key)
-            .send()
-            .await?;
-        
-        if !response.status().is_success() {
-            println!("API Request Failed: Status {}", response.status());
-            sleep(Duration::from_millis(250)).await;
-            continue;
+    while let Some(msg) = ws_stream.next().await {
+        let msg = msg?;
+        if let Message::Text(text) = msg {
+            let data: Vec<serde_json::Value> = serde_json::from_str(&text)?;
+            for event in data {
+                if event["t"] == "t" {
+                    let symbol = event["S"].as_str().unwrap().to_string();
+                    snapshots.insert(symbol.clone(), Snapshot {
+                        latest_trade: Trade {
+                            p: event["p"].as_f64().unwrap(),
+                            s: event["s"].as_f64().unwrap(),
+                            t: event["t"].as_str().unwrap().to_string(),
+                        }
+                    });
+                }
+            }
         }
-
-        let snapshots: HashMap<String, Snapshot> = response.json().await?;
-
+        
         tick_counter += 1;
-
         let mut total_locked_margin = 0.0;
         for state in states.values() {
             match *state {
@@ -108,107 +112,58 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
         for (a, b) in PAIRS {
             let pair_key = format!("{}_{}", a, b);
-            
             if let (Some(snap_a), Some(snap_b)) = (snapshots.get(*a), snapshots.get(*b)) {
                 let state = states.get_mut(&pair_key).unwrap();
+                let last_ts = last_trade_timestamps.get_mut(&pair_key).unwrap();
+
+                let current_t_a = &snap_a.latest_trade.t;
+                let current_t_b = &snap_b.latest_trade.t;
+
+                let (trades_a, vol_a) = if current_t_a == &last_ts.0 { (0, 0.0) } else { last_ts.0 = current_t_a.clone(); (1, snap_a.latest_trade.s) };
+                let (trades_b, vol_b) = if current_t_b == &last_ts.1 { (0, 0.0) } else { last_ts.1 = current_t_b.clone(); (1, snap_b.latest_trade.s) };
 
                 let raw_price_a = snap_a.latest_trade.p;
                 let raw_price_b = snap_b.latest_trade.p;
                 let current_spread = raw_price_a - raw_price_b;
-
-                // Borrow cost calculation
+                
                 let mut short_leg_value = 0.0;
                 match *state {
-                    PositionState::LongSpread { entry_size, .. } => {
-                        let fee_shares = entry_size.max(100.0);
-                        short_leg_value = raw_price_b * fee_shares;
-                    }
-                    PositionState::ShortSpread { entry_size, .. } => {
-                        let fee_shares = entry_size.max(100.0);
-                        short_leg_value = raw_price_a * fee_shares;
-                    }
+                    PositionState::LongSpread { entry_size, .. } => { short_leg_value = raw_price_b * entry_size.max(100.0); }
+                    PositionState::ShortSpread { entry_size, .. } => { short_leg_value = raw_price_a * entry_size.max(100.0); }
                     _ => {}
                 }
                 
-                if short_leg_value > 0.0 {
-                    let tick_borrow_cost = short_leg_value * (ANNUAL_BORROW_RATE / 3_931_200.0);
-                    active_portfolio_balance -= tick_borrow_cost;
-                }
+                if short_leg_value > 0.0 { active_portfolio_balance -= short_leg_value * (ANNUAL_BORROW_RATE / 3_931_200.0); }
 
-                let engine = registry.get_mut(&pair_key).unwrap();
-                let current_pos_i8 = match *state {
-                    PositionState::Flat => 0,
-                    PositionState::LongSpread { .. } => 1,
-                    PositionState::ShortSpread { .. } => -1,
-                };
-                let action = engine.on_tick(
-                    raw_price_a,
-                    raw_price_b,
-                    snap_a.latest_trade.s,
-                    snap_b.latest_trade.s,
-                    1,
-                    1,
-                    available_free_cash,
-                    current_pos_i8,
+                let action = registry.get_mut(&pair_key).unwrap().on_tick(
+                    raw_price_a, raw_price_b, vol_a, vol_b, trades_a, trades_b, available_free_cash,
+                    match *state { PositionState::Flat => 0, PositionState::LongSpread { .. } => 1, PositionState::ShortSpread { .. } => -1 }
                 );
 
-                if tick_counter % 4 == 0 {
-                    println!("[Live Summary] Pair {} | State: {:?} | Signal: {:?} | Balance: {:.2}", pair_key, state, action.signal, active_portfolio_balance);
-                }
+                if tick_counter % 4 == 0 { println!("[Live] Pair {} | Bal: {:.2}", pair_key, active_portfolio_balance); }
 
                 match action.signal {
                     Signal::Buy => {
                         if let PositionState::Flat = *state {
                             if action.size > 0.0 {
-                                let total_slippage_cost = action.execution_slippage * (raw_price_a + raw_price_b) * action.size;
-                                active_portfolio_balance -= total_slippage_cost;
-                                
-                                let initial_margin_rate = 0.50;
-                                let margin_requirement = initial_margin_rate * ((action.size * raw_price_a) + (action.size * raw_price_b));
-                                
-                                println!("OPENING LONG SPREAD {} | SIGNAL: {:?}", pair_key, action.signal);
-                                *state = PositionState::LongSpread { entry_spread: current_spread, entry_size: action.size, locked_margin: margin_requirement };
+                                active_portfolio_balance -= action.execution_slippage * (raw_price_a + raw_price_b) * action.size;
+                                *state = PositionState::LongSpread { entry_spread: current_spread, entry_size: action.size, locked_margin: 0.5 * ((action.size * raw_price_a) + (action.size * raw_price_b)) };
                             }
                         }
                     }
                     Signal::Sell => {
                         if let PositionState::Flat = *state {
                             if action.size > 0.0 {
-                                let total_slippage_cost = action.execution_slippage * (raw_price_a + raw_price_b) * action.size;
-                                active_portfolio_balance -= total_slippage_cost;
-                                
-                                let initial_margin_rate = 0.50;
-                                let margin_requirement = initial_margin_rate * ((action.size * raw_price_a) + (action.size * raw_price_b));
-                                
-                                println!("OPENING SHORT SPREAD {} | SIGNAL: {:?}", pair_key, action.signal);
-                                *state = PositionState::ShortSpread { entry_spread: current_spread, entry_size: action.size, locked_margin: margin_requirement };
+                                active_portfolio_balance -= action.execution_slippage * (raw_price_a + raw_price_b) * action.size;
+                                *state = PositionState::ShortSpread { entry_spread: current_spread, entry_size: action.size, locked_margin: 0.5 * ((action.size * raw_price_a) + (action.size * raw_price_b)) };
                             }
                         }
                     }
-                    Signal::Close => {
-                        match *state {
-                            PositionState::LongSpread { entry_spread, .. } => {
-                                let pnl = (current_spread - entry_spread) * action.size;
-                                let slippage_cost = action.execution_slippage * (raw_price_a + raw_price_b) * action.size;
-                                active_portfolio_balance += pnl - slippage_cost;
-                                println!("CLOSING LONG SPREAD {} | PnL: {:.2} | Slippage: {:.2} | Balance: {:.2}", pair_key, pnl, slippage_cost, active_portfolio_balance);
-                                *state = PositionState::Flat;
-                            }
-                            PositionState::ShortSpread { entry_spread, .. } => {
-                                let pnl = (entry_spread - current_spread) * action.size;
-                                let slippage_cost = action.execution_slippage * (raw_price_a + raw_price_b) * action.size;
-                                active_portfolio_balance += pnl - slippage_cost;
-                                println!("CLOSING SHORT SPREAD {} | PnL: {:.2} | Slippage: {:.2} | Balance: {:.2}", pair_key, pnl, slippage_cost, active_portfolio_balance);
-                                *state = PositionState::Flat;
-                            }
-                            _ => {}
-                        }
-                    }
+                    Signal::Close => { *state = PositionState::Flat; }
                     Signal::Hold => {}
                 }
             }
         }
-
-        sleep(Duration::from_millis(250)).await;
     }
+    Ok(())
 }

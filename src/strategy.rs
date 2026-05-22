@@ -132,7 +132,7 @@ impl Strategy for AdaptiveEngine {
         let short_order_cushion = 1.03; // Alpaca's mandatory 3% short premium check
         let safety_buffer = 0.98;       // 2% cash cushion
 
-        let mut max_shares = 0.0;
+        let max_shares;
         match self.internal_state {
             1 => { // Buy (Long Spread: Long A, Short B)
                 let denominator = (initial_margin_rate * raw_price_a) + (initial_margin_rate * raw_price_b * short_order_cushion);
@@ -154,9 +154,11 @@ impl Strategy for AdaptiveEngine {
         let innovation = raw_price_a - (self.alpha + self.beta * raw_price_b);
         
         // EWMA Variance Tracking for Z-Score
-        self.rolling_mean = (self.rolling_mean * 0.995) + (innovation * 0.005);
-        let demeaned_innovation = innovation - self.rolling_mean;
-        self.rolling_variance = (self.rolling_variance * 0.995) + (demeaned_innovation * demeaned_innovation * 0.005);
+        if trades_a > 0 || trades_b > 0 {
+            self.rolling_mean = (self.rolling_mean * 0.995) + (innovation * 0.005);
+            let demeaned_innovation = innovation - self.rolling_mean;
+            self.rolling_variance = (self.rolling_variance * 0.995) + (demeaned_innovation * demeaned_innovation * 0.005);
+        }
         let statistical_std_dev = self.rolling_variance.sqrt().max(1e-6);
         let z = innovation / statistical_std_dev;
 
@@ -313,12 +315,16 @@ impl Strategy for AdaptiveEngine {
 
         let passive_friction = friction_cost * 0.5;
 
+        let volatility_intensity = self.rolling_variance.sqrt() / raw_price_a.max(raw_price_b);
+        let sniping_hazard_penalty = 1.0 + (volatility_intensity * 500.0);
+        let adjusted_passive_friction = passive_friction * sniping_hazard_penalty;
+
         let min_borrow_fee_drag = 100.0 * (raw_price_a.max(raw_price_b)) * (0.010 / 3_931_200.0);
 
         let payoff_agg_noise = expected_reversion_payoff - friction_cost - min_borrow_fee_drag;
         let payoff_agg_toxic = (expected_reversion_payoff * 0.2) - (effective_loss_toxic * 0.5) - friction_cost - min_borrow_fee_drag;
-        let payoff_pass_noise = (expected_reversion_payoff * 0.8) - passive_friction - min_borrow_fee_drag;
-        let payoff_pass_toxic = -effective_loss_toxic - passive_friction - min_borrow_fee_drag;
+        let payoff_pass_noise = (expected_reversion_payoff * 0.8) - adjusted_passive_friction - min_borrow_fee_drag;
+        let payoff_pass_toxic = -effective_loss_toxic - adjusted_passive_friction - min_borrow_fee_drag;
 
         let _market_payoff_agg_noise = -payoff_agg_noise;
         let _market_payoff_agg_toxic = -payoff_agg_toxic;
