@@ -97,16 +97,21 @@ fn run_simulation(
                     (PositionState::LongSpread, Signal::Close) => {
                         let entry_spread = entry_spreads[&pair_key];
                         let pnl = ((data_a.0 - data_b.0) - entry_spread) * action.size;
-                        let round_trip_slippage_cost = action.execution_slippage * (data_a.0 + data_b.0) * action.size;
-                        *balance += pnl - round_trip_slippage_cost;
+                        
+                        // Realistic costs: 0.0001 per share commission + wide slippage
+                        let commission = action.size * 0.0002;
+                        let slippage = 0.0003 * (data_a.0 + data_b.0) * action.size;
+                        *balance += pnl - slippage - commission;
                         *state = PositionState::Flat;
                         *trades += 1;
                     }
                     (PositionState::ShortSpread, Signal::Close) => {
                         let entry_spread = entry_spreads[&pair_key];
                         let pnl = (entry_spread - (data_a.0 - data_b.0)) * action.size;
-                        let round_trip_slippage_cost = action.execution_slippage * (data_a.0 + data_b.0) * action.size;
-                        *balance += pnl - round_trip_slippage_cost;
+                        
+                        let commission = action.size * 0.0002;
+                        let slippage = 0.0003 * (data_a.0 + data_b.0) * action.size;
+                        *balance += pnl - slippage - commission;
                         *state = PositionState::Flat;
                         *trades += 1;
                     }

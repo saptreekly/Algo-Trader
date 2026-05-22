@@ -132,23 +132,19 @@ impl Strategy for AdaptiveEngine {
         let short_order_cushion = 1.03; // Alpaca's mandatory 3% short premium check
         let safety_buffer = 0.98;       // 2% cash cushion
 
-        let max_shares;
-        match self.internal_state {
+        let max_shares = match self.internal_state {
             1 => { // Buy (Long Spread: Long A, Short B)
-                let denominator = (initial_margin_rate * raw_price_a) + (initial_margin_rate * raw_price_b * short_order_cushion);
-                max_shares = if denominator > 0.0 { (account_balance * safety_buffer) / denominator } else { 0.0 };
+                let denominator = (initial_margin_rate * raw_price_a) + (initial_margin_rate * raw_price_b * self.beta.abs() * short_order_cushion);
+                if denominator > 0.0 { (account_balance * safety_buffer) / denominator } else { 0.0 }
             },
             -1 => { // Sell (Short Spread: Short A, Long B)
-                let denominator = (initial_margin_rate * raw_price_a * short_order_cushion) + (initial_margin_rate * raw_price_b);
-                max_shares = if denominator > 0.0 { (account_balance * safety_buffer) / denominator } else { 0.0 };
+                let denominator = (initial_margin_rate * raw_price_a * short_order_cushion) + (initial_margin_rate * raw_price_b * self.beta.abs());
+                if denominator > 0.0 { (account_balance * safety_buffer) / denominator } else { 0.0 }
             },
-            _ => { max_shares = 0.0; }
-        }
-
-        if max_shares < 1.0 {
-            self.prev_innovation = 0.0;
-            return Action { signal: Signal::Hold, size: 0.0, execution_slippage: 0.0 };
-        }
+            _ => 0.0
+        };
+        // If flat, we don't have a specific sizing yet, but we must proceed to check signals!
+        // The signal logic will determine the size when it enters a position.
 
         // 1. Kalman Filter Update
         let innovation = raw_price_a - (self.alpha + self.beta * raw_price_b);

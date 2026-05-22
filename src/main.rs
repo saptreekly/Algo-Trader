@@ -159,7 +159,25 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             }
                         }
                     }
-                    Signal::Close => { *state = PositionState::Flat; }
+                    Signal::Close => {
+                        match *state {
+                            PositionState::LongSpread { entry_spread, entry_size, .. } => {
+                                let pnl = (current_spread - entry_spread) * entry_size;
+                                let slippage_cost = action.execution_slippage * (raw_price_a + raw_price_b) * entry_size;
+                                active_portfolio_balance += pnl - slippage_cost;
+                                println!("CLOSING LONG SPREAD {} | PnL: {:.2} | Slippage: {:.2} | Balance: {:.2}", pair_key, pnl, slippage_cost, active_portfolio_balance);
+                                *state = PositionState::Flat;
+                            }
+                            PositionState::ShortSpread { entry_spread, entry_size, .. } => {
+                                let pnl = (entry_spread - current_spread) * entry_size;
+                                let slippage_cost = action.execution_slippage * (raw_price_a + raw_price_b) * entry_size;
+                                active_portfolio_balance += pnl - slippage_cost;
+                                println!("CLOSING SHORT SPREAD {} | PnL: {:.2} | Slippage: {:.2} | Balance: {:.2}", pair_key, pnl, slippage_cost, active_portfolio_balance);
+                                *state = PositionState::Flat;
+                            }
+                            _ => {}
+                        }
+                    }
                     Signal::Hold => {}
                 }
             }
