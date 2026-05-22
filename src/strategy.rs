@@ -9,6 +9,7 @@ pub enum Signal {
 pub struct Action {
     pub signal: Signal,
     pub size: f64,
+    pub execution_slippage: f64,
 }
 
 pub trait Strategy {
@@ -31,8 +32,6 @@ pub struct AdaptiveEngine {
     p01: f64,
     p10: f64,
     p11: f64,
-    q_alpha: f64,
-    q_beta: f64,
     r_noise: f64,
     z_threshold: f64,
     loss_toxic: f64,
@@ -54,8 +53,6 @@ impl AdaptiveEngine {
     }
 
     pub fn with_parameters(
-        q_alpha: f64,
-        q_beta: f64,
         r_noise: f64,
         z_threshold: f64,
         loss_toxic: f64,
@@ -70,8 +67,6 @@ impl AdaptiveEngine {
             p01: 0.0,
             p10: 0.0,
             p11: 0.001,
-            q_alpha,
-            q_beta,
             r_noise,
             z_threshold,
             loss_toxic,
@@ -91,7 +86,7 @@ impl AdaptiveEngine {
 
 impl Default for AdaptiveEngine {
     fn default() -> Self {
-        Self::with_parameters(0.0001, 0.0001, 0.01, 2.0, 0.05, 100.0, 0.1, 0.99)
+        Self::with_parameters(0.01, 2.0, 0.05, 100.0, 0.1, 0.99)
     }
 }
 
@@ -114,32 +109,31 @@ impl Strategy for AdaptiveEngine {
         if max_shares < 1.0 {
             self.internal_state = 0;
             self.prev_innovation = 0.0;
-            return Action { signal: Signal::Hold, size: 0.0 };
+            return Action { signal: Signal::Hold, size: 0.0, execution_slippage: 0.0 };
         }
 
         // 1. Kalman Filter Update
 // ... (rest of implementation)
-
-        self.p11 += self.q_beta;
-        let innovation = price_a - (self.alpha + self.beta * price_b);
-        let dynamic_r = self.r_noise * (1.0 + (vol_a + vol_b).ln_1p());
-        let s = self.p00 + price_b * (self.p01 + self.p10 + price_b * self.p11) + dynamic_r;
-        let k0 = (self.p00 + self.p01 * price_b) / s;
-        let k1 = (self.p10 + self.p11 * price_b) / s;
-        self.alpha += k0 * innovation;
-        self.beta += k1 * innovation;
-        let m00 = 1.0 - k0;
-        let m01 = -k0 * price_b;
-        let m10 = -k1;
-        let m11 = 1.0 - k1 * price_b;
-        let new_p00 = m00 * self.p00 + m01 * self.p10;
-        let new_p01 = m00 * self.p01 + m01 * self.p11;
-        let new_p10 = m10 * self.p00 + m11 * self.p10;
-        let new_p11 = m10 * self.p01 + m11 * self.p11;
-        self.p00 = new_p00;
-        self.p01 = new_p01;
-        self.p10 = new_p10;
-        self.p11 = new_p11;
+// 1. Kalman Filter Update
+let innovation = price_a - (self.alpha + self.beta * price_b);
+let dynamic_r = self.r_noise * (1.0 + (vol_a + vol_b).ln_1p());
+let s = self.p00 + price_b * (self.p01 + self.p10 + price_b * self.p11) + dynamic_r;
+let k0 = (self.p00 + self.p01 * price_b) / s;
+let k1 = (self.p10 + self.p11 * price_b) / s;
+self.alpha += k0 * innovation;
+self.beta += k1 * innovation;
+let m00 = 1.0 - k0;
+let m01 = -k0 * price_b;
+let m10 = -k1;
+let m11 = 1.0 - k1 * price_b;
+let new_p00 = m00 * self.p00 + m01 * self.p10;
+let new_p01 = m00 * self.p01 + m01 * self.p11;
+let new_p10 = m10 * self.p00 + m11 * self.p10;
+let new_p11 = m10 * self.p01 + m11 * self.p11;
+self.p00 = new_p00;
+self.p01 = new_p01;
+self.p10 = new_p10;
+self.p11 = new_p11;
 
         // 2. Regret Matching for z_threshold tuning
         let std_dev = s.sqrt();
@@ -241,7 +235,7 @@ let q = q.clamp(0.0, 1.0);
         if eu_agg <= 0.0 && eu_pass <= 0.0 {
             self.internal_state = 0;
             self.prev_innovation = innovation;
-            return Action { signal: Signal::Hold, size: 0.0 };
+            return Action { signal: Signal::Hold, size: 0.0, execution_slippage: 0.0 };
         }
 
         let signal_result = match self.internal_state {
@@ -259,22 +253,30 @@ let q = q.clamp(0.0, 1.0);
         };
 
         let mut final_signal = signal_result;
-        if q <= 0.5 && signal_result != Signal::Hold {
-            let fill_prob = if p_toxic < 0.3 { 0.4 } else { 0.85 };
-            if rand::random::<f64>() > fill_prob {
-                println!("Passive fill missed for {:?}", signal_result);
-                final_signal = Signal::Hold;
-            } else if p_toxic >= 0.3 {
-                println!("Passive fill achieved with adverse selection penalty (1bps)");
+        let mut slippage = 0.0;
+        
+        if signal_result != Signal::Hold {
+            if q <= 0.5 { // Passive attempt
+                let fill_prob = if p_toxic < 0.3 { 0.4 } else { 0.85 };
+                if rand::random::<f64>() > fill_prob {
+                    println!("Passive fill missed for {:?}", signal_result);
+                    final_signal = Signal::Hold;
+                    self.internal_state = 0; // REVERT STATE
+                } else if p_toxic >= 0.3 {
+                    println!("Passive fill achieved with adverse selection penalty (1bps)");
+                    slippage = 0.0001;
+                }
+            } else { // Aggressive attempt
+                slippage = 0.00015;
             }
         }
 
         if final_signal != Signal::Hold {
-            let action = if q > 0.5 { "Aggressive Market Fill" } else { "Passive Limit Fill" };
-            println!("Engine recommends: {} for {:?} | Size: {:.2}", action, final_signal, max_shares);
+            let action_type = if q > 0.5 { "Aggressive Market Fill" } else { "Passive Limit Fill" };
+            println!("Engine recommends: {} for {:?} | Size: {:.2} | Slippage: {:.5}", action_type, final_signal, max_shares, slippage);
         }
         
         self.prev_innovation = innovation;
-        Action { signal: final_signal, size: max_shares }
+        Action { signal: final_signal, size: max_shares, execution_slippage: slippage }
     }
 }

@@ -45,7 +45,7 @@ fn run_simulation(
 
     for (a, b) in pairs {
         let pair_key = format!("{}_{}", a, b);
-        registry.insert(pair_key.clone(), AdaptiveEngine::with_parameters(0.000002, 0.000002, 0.0001, z_threshold, loss_toxic, initial_vol, 0.1, 0.99));
+        registry.insert(pair_key.clone(), AdaptiveEngine::with_parameters(0.0001, z_threshold, loss_toxic, initial_vol, 0.1, 0.99));
         states.insert(pair_key.clone(), PositionState::Flat);
         balances.insert(pair_key.clone(), 100.0 / 21.0);
         trade_counts.insert(pair_key.clone(), 0);

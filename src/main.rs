@@ -44,10 +44,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     for (a, b) in PAIRS {
         let key = format!("{}_{}", a, b);
         let engine = match key.as_str() {
-            "AAPL_MSFT" => AdaptiveEngine::with_parameters(0.000002, 0.000002, 0.0001, 0.30, 1.00, 4000.00, 0.1, 0.99),
-            "NVDA_AMD" => AdaptiveEngine::with_parameters(0.000002, 0.000002, 0.0001, 0.60, 1.00, 4000.00, 0.1, 0.99),
-            "MSFT_NVDA" => AdaptiveEngine::with_parameters(0.000002, 0.000002, 0.0001, 0.30, 1.00, 1500.00, 0.1, 0.99),
-            _ => AdaptiveEngine::with_parameters(0.000002, 0.000002, 0.0001, 0.30, 1.00, 500.0, 0.1, 0.99), // Defensive kill-switch
+            "AAPL_MSFT" => AdaptiveEngine::with_parameters(0.0001, 0.30, 1.00, 4000.00, 0.1, 0.99),
+            "NVDA_AMD" => AdaptiveEngine::with_parameters(0.0001, 0.60, 1.00, 4000.00, 0.1, 0.99),
+            "MSFT_NVDA" => AdaptiveEngine::with_parameters(0.0001, 0.30, 1.00, 1500.00, 0.1, 0.99),
+            _ => AdaptiveEngine::with_parameters(0.0001, 0.30, 1.00, 500.0, 0.1, 0.99), // Defensive kill-switch
         };
         registry.insert(key.clone(), engine);
         states.insert(key, PositionState::Flat);
@@ -59,6 +59,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     println!("Starting high-frequency trading loop...");
 
     let mut tick_counter: u64 = 0;
+    let mut active_portfolio_balance = 100.0;
 
     loop {
         let response = client
@@ -96,32 +97,36 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     snap_b.latest_trade.s,
                     1,
                     1,
-                    10000.0,
+                    active_portfolio_balance,
                 );
 
                 if tick_counter % 4 == 0 {
-                    println!("[Live Summary] Pair {} | State: {:?} | Signal: {:?}", pair_key, state, action.signal);
+                    println!("[Live Summary] Pair {} | State: {:?} | Signal: {:?} | Balance: {:.2}", pair_key, state, action.signal, active_portfolio_balance);
                 }
 
                 match action.signal {
                     Signal::Buy => {
-                        if *state == PositionState::Flat {
+                        if *state == PositionState::Flat && action.size > 0.0 {
                             println!("OPENING LONG SPREAD {} | SIGNAL: {:?}", pair_key, action.signal);
                             *state = PositionState::LongSpread;
                         }
                     }
                     Signal::Sell => {
-                        if *state == PositionState::Flat {
+                        if *state == PositionState::Flat && action.size > 0.0 {
                             println!("OPENING SHORT SPREAD {} | SIGNAL: {:?}", pair_key, action.signal);
                             *state = PositionState::ShortSpread;
                         }
                     }
                     Signal::Hold => {
                         if *state == PositionState::LongSpread {
-                             println!("CLOSING LONG SPREAD {} | SIGNAL: {:?}", pair_key, action.signal);
+                             let pnl = (norm_price_a - norm_price_b) * action.size * 1000.0;
+                             active_portfolio_balance += pnl;
+                             println!("CLOSING LONG SPREAD {} | PnL: {:.2} | New Balance: {:.2}", pair_key, pnl, active_portfolio_balance);
                              *state = PositionState::Flat;
                         } else if *state == PositionState::ShortSpread {
-                             println!("CLOSING SHORT SPREAD {} | SIGNAL: {:?}", pair_key, action.signal);
+                             let pnl = -(norm_price_a - norm_price_b) * action.size * 1000.0;
+                             active_portfolio_balance += pnl;
+                             println!("CLOSING SHORT SPREAD {} | PnL: {:.2} | New Balance: {:.2}", pair_key, pnl, active_portfolio_balance);
                              *state = PositionState::Flat;
                         }
                     }
