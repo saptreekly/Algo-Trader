@@ -54,8 +54,24 @@ async fn main() -> Result<(), Box<dyn Error>> {
         states.insert(key, PositionState::Flat);
     }
 
+    let mut unique_symbols = std::collections::HashSet::new();
+    for &(asset_a, asset_b) in PAIRS {
+        unique_symbols.insert(asset_a);
+        unique_symbols.insert(asset_b);
+    }
+    unique_symbols.insert("QQQ");
+    unique_symbols.insert("SPY");
+
+    let symbols_query: String = unique_symbols
+        .into_iter()
+        .collect::<Vec<&str>>()
+        .join(",");
+
     let client = reqwest::Client::new();
-    let url = "https://data.alpaca.markets/v2/stocks/snapshots?symbols=AAPL,MSFT,NVDA,AMD,QQQ,SPY&feed=iex";
+    let url = format!(
+        "https://data.alpaca.markets/v2/stocks/snapshots?symbols={}&feed=iex",
+        symbols_query
+    );
 
     println!("Starting high-frequency trading loop...");
 
@@ -64,7 +80,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     loop {
         let response = client
-            .get(url)
+            .get(&url)
             .header("APCA-API-KEY-ID", &api_key)
             .header("APCA-API-SECRET-KEY", &secret_key)
             .send()
