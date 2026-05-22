@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1779413803533,
+  "lastUpdate": 1779416935716,
   "repoUrl": "https://github.com/saptreekly/Algo-Trader",
   "entries": {
     "Benchmark": [
@@ -238,6 +238,36 @@ window.BENCHMARK_DATA = {
           {
             "name": "on_tick_performance",
             "value": 266,
+            "range": "± 0",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "jweekly201@gmail.com",
+            "name": "saptreekly",
+            "username": "saptreekly"
+          },
+          "committer": {
+            "email": "jweekly201@gmail.com",
+            "name": "saptreekly",
+            "username": "saptreekly"
+          },
+          "distinct": true,
+          "id": "90cd003085f344c1511401ef2a901b92dfa7868c",
+          "message": "feat: implement WebSocket data ingestion and broker-compliant margin management",
+          "timestamp": "2026-05-22T14:27:57+12:00",
+          "tree_id": "c5d0c07b51fc36ae6bcfeae48ea79b31337f8865",
+          "url": "https://github.com/saptreekly/Algo-Trader/commit/90cd003085f344c1511401ef2a901b92dfa7868c"
+        },
+        "date": 1779416935703,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "on_tick_performance",
+            "value": 8,
             "range": "± 0",
             "unit": "ns/iter"
           }
