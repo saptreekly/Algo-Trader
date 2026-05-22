@@ -42,12 +42,14 @@ fn run_simulation(
     let mut trade_counts: HashMap<String, u64> = HashMap::new();
     let mut registry: HashMap<String, AdaptiveEngine> = HashMap::new();
     let mut latest_prices: HashMap<String, (f64, f64, u64)> = HashMap::new();
+    let mut entry_spreads: HashMap<String, f64> = HashMap::new();
 
+    let initial_balance_per_pair = 100.0 / pairs.len() as f64;
     for (a, b) in pairs {
         let pair_key = format!("{}_{}", a, b);
         registry.insert(pair_key.clone(), AdaptiveEngine::with_parameters(0.0001, z_threshold, loss_toxic, initial_vol, 0.1, 0.99));
         states.insert(pair_key.clone(), PositionState::Flat);
-        balances.insert(pair_key.clone(), 100.0 / 21.0);
+        balances.insert(pair_key.clone(), initial_balance_per_pair);
         trade_counts.insert(pair_key.clone(), 0);
     }
 
@@ -69,11 +71,13 @@ fn run_simulation(
                 let action = engine.on_tick(
                     norm_price_a,
                     norm_price_b,
+                    data_a.0,
+                    data_b.0,
                     data_a.1,
                     data_b.1,
                     data_a.2,
                     data_b.2,
-                    10000.0,
+                    balances[&pair_key],
                 );
                 
                 let state = states.get_mut(&pair_key).unwrap();
@@ -84,24 +88,28 @@ fn run_simulation(
                     (PositionState::Flat, Signal::Buy) => {
                         *state = PositionState::LongSpread;
                         *trades += 1;
-                        *balance -= 0.02;
+                        entry_spreads.insert(pair_key.clone(), data_a.0 - data_b.0);
                     }
                     (PositionState::Flat, Signal::Sell) => {
                         *state = PositionState::ShortSpread;
                         *trades += 1;
-                        *balance -= 0.02;
+                        entry_spreads.insert(pair_key.clone(), data_a.0 - data_b.0);
                     }
                     (PositionState::LongSpread, Signal::Sell) => {
+                        let entry_spread = entry_spreads[&pair_key];
+                        let pnl = ((data_a.0 - data_b.0) - entry_spread) * action.size;
+                        let round_trip_slippage_cost = action.execution_slippage * (data_a.0 + data_b.0) * action.size;
+                        *balance += pnl - round_trip_slippage_cost;
                         *state = PositionState::Flat;
                         *trades += 1;
-                        *balance -= 0.02;
-                        *balance += (norm_price_a - norm_price_b) * 1000.0;
                     }
                     (PositionState::ShortSpread, Signal::Buy) => {
+                        let entry_spread = entry_spreads[&pair_key];
+                        let pnl = (entry_spread - (data_a.0 - data_b.0)) * action.size;
+                        let round_trip_slippage_cost = action.execution_slippage * (data_a.0 + data_b.0) * action.size;
+                        *balance += pnl - round_trip_slippage_cost;
                         *state = PositionState::Flat;
                         *trades += 1;
-                        *balance -= 0.02;
-                        *balance -= (norm_price_a - norm_price_b) * 1000.0;
                     }
                     _ => {}
                 }
@@ -168,15 +176,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     println!("Optimization Report:");
-    let mut global_balance = 0.0;
+    let mut total_pnl = 0.0;
     for (pair_key, config) in best_configs {
         let (balance, trades, z, s, _l) = config;
-        let pnl = balance - (100.0 / 21.0);
-        global_balance += balance;
+        let initial_pair_balance = 100.0 / 21.0; 
+        let pnl = if trades > 0 { balance - initial_pair_balance } else { 0.0 };
+        total_pnl += pnl;
         println!("Pair: {} | Optimal Z: {:.2} | Size Thresh: {:.1} | Total Trades: {} | Net PnL: ${:.2}", pair_key, z, s, trades, pnl);
     }
 
-    println!("Max Achieved Global Balance: ${:.2}", global_balance);
+    println!("Total Net PnL: ${:.2}", total_pnl);
 
     Ok(())
 }

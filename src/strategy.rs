@@ -15,8 +15,10 @@ pub struct Action {
 pub trait Strategy {
     fn on_tick(
         &mut self,
-        price_a: f64,
-        price_b: f64,
+        norm_price_a: f64,
+        norm_price_b: f64,
+        raw_price_a: f64,
+        raw_price_b: f64,
         vol_a: f64,
         vol_b: f64,
         trades_a: u64,
@@ -93,8 +95,10 @@ impl Default for AdaptiveEngine {
 impl Strategy for AdaptiveEngine {
     fn on_tick(
         &mut self,
-        price_a: f64,
-        price_b: f64,
+        _norm_price_a: f64,
+        _norm_price_b: f64,
+        raw_price_a: f64,
+        raw_price_b: f64,
         vol_a: f64,
         vol_b: f64,
         trades_a: u64,
@@ -104,7 +108,7 @@ impl Strategy for AdaptiveEngine {
         self.tick_count += 1;
 
         let available_buying_power = account_balance * 2.0;
-        let max_shares = (available_buying_power / 2.0) / (price_a + price_b);
+        let max_shares = (available_buying_power / 2.0) / (raw_price_a + raw_price_b);
 
         if max_shares < 1.0 {
             self.internal_state = 0;
@@ -113,27 +117,25 @@ impl Strategy for AdaptiveEngine {
         }
 
         // 1. Kalman Filter Update
-// ... (rest of implementation)
-// 1. Kalman Filter Update
-let innovation = price_a - (self.alpha + self.beta * price_b);
-let dynamic_r = self.r_noise * (1.0 + (vol_a + vol_b).ln_1p());
-let s = self.p00 + price_b * (self.p01 + self.p10 + price_b * self.p11) + dynamic_r;
-let k0 = (self.p00 + self.p01 * price_b) / s;
-let k1 = (self.p10 + self.p11 * price_b) / s;
-self.alpha += k0 * innovation;
-self.beta += k1 * innovation;
-let m00 = 1.0 - k0;
-let m01 = -k0 * price_b;
-let m10 = -k1;
-let m11 = 1.0 - k1 * price_b;
-let new_p00 = m00 * self.p00 + m01 * self.p10;
-let new_p01 = m00 * self.p01 + m01 * self.p11;
-let new_p10 = m10 * self.p00 + m11 * self.p10;
-let new_p11 = m10 * self.p01 + m11 * self.p11;
-self.p00 = new_p00;
-self.p01 = new_p01;
-self.p10 = new_p10;
-self.p11 = new_p11;
+        let innovation = raw_price_a - (self.alpha + self.beta * raw_price_b);
+        let dynamic_r = self.r_noise * (1.0 + (vol_a + vol_b).ln_1p());
+        let s = self.p00 + raw_price_b * (self.p01 + self.p10 + raw_price_b * self.p11) + dynamic_r;
+        let k0 = (self.p00 + self.p01 * raw_price_b) / s;
+        let k1 = (self.p10 + self.p11 * raw_price_b) / s;
+        self.alpha += k0 * innovation;
+        self.beta += k1 * innovation;
+        let m00 = 1.0 - k0;
+        let m01 = -k0 * raw_price_b;
+        let m10 = -k1;
+        let m11 = 1.0 - k1 * raw_price_b;
+        let new_p00 = m00 * self.p00 + m01 * self.p10;
+        let new_p01 = m00 * self.p01 + m01 * self.p11;
+        let new_p10 = m10 * self.p00 + m11 * self.p10;
+        let new_p11 = m10 * self.p01 + m11 * self.p11;
+        self.p00 = new_p00;
+        self.p01 = new_p01;
+        self.p10 = new_p10;
+        self.p11 = new_p11;
 
         // 2. Regret Matching for z_threshold tuning
         let std_dev = s.sqrt();
@@ -204,8 +206,6 @@ self.p11 = new_p11;
         let p_toxic = self.p_toxic_prior;
 
         // Asymmetric Payoffs
-        // innovation > 0: Shorting the spread (Short Squeeze risk -> higher toxic loss)
-        // innovation < 0: Buying the spread (Panic liquidation -> lower toxic loss)
         let toxic_multiplier = if innovation > 0.0 { 1.5 } else { 0.8 };
         let effective_loss_toxic = self.loss_toxic * toxic_multiplier;
 
@@ -217,21 +217,21 @@ self.p11 = new_p11;
         let payoff_pass_noise = (live_payoff * 0.8) - passive_friction;
         let payoff_pass_toxic = -effective_loss_toxic - passive_friction;
 
-let market_payoff_agg_noise = -payoff_agg_noise;
-let market_payoff_agg_toxic = -payoff_agg_toxic;
-let market_payoff_pass_noise = -payoff_pass_noise;
-let market_payoff_pass_toxic = -payoff_pass_toxic;
+        let market_payoff_agg_noise = -payoff_agg_noise;
+        let market_payoff_agg_toxic = -payoff_agg_toxic;
+        let market_payoff_pass_noise = -payoff_pass_noise;
+        let market_payoff_pass_toxic = -payoff_pass_toxic;
 
-let eu_agg = p_toxic * payoff_agg_toxic + (1.0 - p_toxic) * payoff_agg_noise;
-let eu_pass = p_toxic * payoff_pass_toxic + (1.0 - p_toxic) * payoff_pass_noise;
+        let eu_agg = p_toxic * payoff_agg_toxic + (1.0 - p_toxic) * payoff_agg_noise;
+        let eu_pass = p_toxic * payoff_pass_toxic + (1.0 - p_toxic) * payoff_pass_noise;
 
-let denominator = market_payoff_agg_toxic - market_payoff_pass_toxic - market_payoff_agg_noise + market_payoff_pass_noise;
-let q = if denominator.abs() > 1e-9 {
-    (market_payoff_pass_noise - market_payoff_pass_toxic) / denominator
-} else {
-    0.5
-};
-let q = q.clamp(0.0, 1.0);
+        let denominator = market_payoff_agg_toxic - market_payoff_pass_toxic - market_payoff_agg_noise + market_payoff_pass_noise;
+        let q = if denominator.abs() > 1e-9 {
+            (market_payoff_pass_noise - market_payoff_pass_toxic) / denominator
+        } else {
+            0.5
+        };
+        let q = q.clamp(0.0, 1.0);
         if eu_agg <= 0.0 && eu_pass <= 0.0 {
             self.internal_state = 0;
             self.prev_innovation = innovation;
@@ -259,21 +259,14 @@ let q = q.clamp(0.0, 1.0);
             if q <= 0.5 { // Passive attempt
                 let fill_prob = if p_toxic < 0.3 { 0.4 } else { 0.85 };
                 if rand::random::<f64>() > fill_prob {
-                    println!("Passive fill missed for {:?}", signal_result);
                     final_signal = Signal::Hold;
                     self.internal_state = 0; // REVERT STATE
                 } else if p_toxic >= 0.3 {
-                    println!("Passive fill achieved with adverse selection penalty (1bps)");
                     slippage = 0.0001;
                 }
             } else { // Aggressive attempt
                 slippage = 0.00015;
             }
-        }
-
-        if final_signal != Signal::Hold {
-            let action_type = if q > 0.5 { "Aggressive Market Fill" } else { "Passive Limit Fill" };
-            println!("Engine recommends: {} for {:?} | Size: {:.2} | Slippage: {:.5}", action_type, final_signal, max_shares, slippage);
         }
         
         self.prev_innovation = innovation;

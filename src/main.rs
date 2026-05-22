@@ -21,8 +21,8 @@ struct Snapshot {
 #[derive(Debug, PartialEq, Clone, Copy)]
 enum PositionState {
     Flat,
-    LongSpread,
-    ShortSpread,
+    LongSpread { entry_spread: f64 },
+    ShortSpread { entry_spread: f64 },
 }
 
 const PAIRS: &[(&str, &str)] = &[
@@ -47,7 +47,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             "AAPL_MSFT" => AdaptiveEngine::with_parameters(0.0001, 0.30, 1.00, 4000.00, 0.1, 0.99),
             "NVDA_AMD" => AdaptiveEngine::with_parameters(0.0001, 0.60, 1.00, 4000.00, 0.1, 0.99),
             "MSFT_NVDA" => AdaptiveEngine::with_parameters(0.0001, 0.30, 1.00, 1500.00, 0.1, 0.99),
-            _ => AdaptiveEngine::with_parameters(0.0001, 0.30, 1.00, 500.0, 0.1, 0.99), // Defensive kill-switch
+            _ => AdaptiveEngine::with_parameters(0.0001, 0.30, 1.00, 500.0, 0.1, 0.99),
         };
         registry.insert(key.clone(), engine);
         states.insert(key, PositionState::Flat);
@@ -88,11 +88,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
                 let norm_price_a = snap_a.latest_trade.p / baseline.0;
                 let norm_price_b = snap_b.latest_trade.p / baseline.1;
+                let raw_price_a = snap_a.latest_trade.p;
+                let raw_price_b = snap_b.latest_trade.p;
+                let current_spread = raw_price_a - raw_price_b;
 
                 let engine = registry.get_mut(&pair_key).unwrap();
                 let action = engine.on_tick(
                     norm_price_a,
                     norm_price_b,
+                    raw_price_a,
+                    raw_price_b,
                     snap_a.latest_trade.s,
                     snap_b.latest_trade.s,
                     1,
@@ -106,28 +111,38 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
                 match action.signal {
                     Signal::Buy => {
-                        if *state == PositionState::Flat && action.size > 0.0 {
-                            println!("OPENING LONG SPREAD {} | SIGNAL: {:?}", pair_key, action.signal);
-                            *state = PositionState::LongSpread;
+                        if let PositionState::Flat = *state {
+                            if action.size > 0.0 {
+                                println!("OPENING LONG SPREAD {} | SIGNAL: {:?}", pair_key, action.signal);
+                                *state = PositionState::LongSpread { entry_spread: current_spread };
+                            }
                         }
                     }
                     Signal::Sell => {
-                        if *state == PositionState::Flat && action.size > 0.0 {
-                            println!("OPENING SHORT SPREAD {} | SIGNAL: {:?}", pair_key, action.signal);
-                            *state = PositionState::ShortSpread;
+                        if let PositionState::Flat = *state {
+                            if action.size > 0.0 {
+                                println!("OPENING SHORT SPREAD {} | SIGNAL: {:?}", pair_key, action.signal);
+                                *state = PositionState::ShortSpread { entry_spread: current_spread };
+                            }
                         }
                     }
                     Signal::Hold => {
-                        if *state == PositionState::LongSpread {
-                             let pnl = (norm_price_a - norm_price_b) * action.size * 1000.0;
-                             active_portfolio_balance += pnl;
-                             println!("CLOSING LONG SPREAD {} | PnL: {:.2} | New Balance: {:.2}", pair_key, pnl, active_portfolio_balance);
-                             *state = PositionState::Flat;
-                        } else if *state == PositionState::ShortSpread {
-                             let pnl = -(norm_price_a - norm_price_b) * action.size * 1000.0;
-                             active_portfolio_balance += pnl;
-                             println!("CLOSING SHORT SPREAD {} | PnL: {:.2} | New Balance: {:.2}", pair_key, pnl, active_portfolio_balance);
-                             *state = PositionState::Flat;
+                        match *state {
+                            PositionState::LongSpread { entry_spread } => {
+                                let pnl = (current_spread - entry_spread) * action.size;
+                                let slippage_cost = action.execution_slippage * (raw_price_a + raw_price_b) * action.size;
+                                active_portfolio_balance += pnl - slippage_cost;
+                                println!("CLOSING LONG SPREAD {} | PnL: {:.2} | Slippage: {:.2} | Balance: {:.2}", pair_key, pnl, slippage_cost, active_portfolio_balance);
+                                *state = PositionState::Flat;
+                            }
+                            PositionState::ShortSpread { entry_spread } => {
+                                let pnl = (entry_spread - current_spread) * action.size;
+                                let slippage_cost = action.execution_slippage * (raw_price_a + raw_price_b) * action.size;
+                                active_portfolio_balance += pnl - slippage_cost;
+                                println!("CLOSING SHORT SPREAD {} | PnL: {:.2} | Slippage: {:.2} | Balance: {:.2}", pair_key, pnl, slippage_cost, active_portfolio_balance);
+                                *state = PositionState::Flat;
+                            }
+                            _ => {}
                         }
                     }
                 }
