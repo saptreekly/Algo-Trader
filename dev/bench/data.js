@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1779418758020,
+  "lastUpdate": 1779420255954,
   "repoUrl": "https://github.com/saptreekly/Algo-Trader",
   "entries": {
     "Benchmark": [
@@ -359,6 +359,36 @@ window.BENCHMARK_DATA = {
             "name": "on_tick_performance",
             "value": 264,
             "range": "± 8",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "jweekly201@gmail.com",
+            "name": "saptreekly",
+            "username": "saptreekly"
+          },
+          "committer": {
+            "email": "jweekly201@gmail.com",
+            "name": "saptreekly",
+            "username": "saptreekly"
+          },
+          "distinct": true,
+          "id": "5a9a344e80744e0b575566dc98461cc9d23ad451",
+          "message": "refactor: improve strategy robustness and trade quality",
+          "timestamp": "2026-05-22T15:23:39+12:00",
+          "tree_id": "2fa929925325ef9a5789e42014ca94fe1db47e4b",
+          "url": "https://github.com/saptreekly/Algo-Trader/commit/5a9a344e80744e0b575566dc98461cc9d23ad451"
+        },
+        "date": 1779420255941,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "on_tick_performance",
+            "value": 265,
+            "range": "± 1",
             "unit": "ns/iter"
           }
         ]
