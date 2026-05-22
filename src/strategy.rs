@@ -162,7 +162,7 @@ impl Strategy for AdaptiveEngine {
                 .zip(self.innovation_history.iter().skip(5))
                 .map(|(a, b)| (a - b).powi(2)).sum::<f64>() / (5.0 * (n - 5) as f64);
             
-            variance_ratio = v5 / (5.0 * v1);
+            variance_ratio = if v1 > 1e-9 { v5 / v1 } else { 1.0 };
         }
 
         let dynamic_r = self.r_noise * (1.0 + (vol_a + vol_b).ln_1p());
