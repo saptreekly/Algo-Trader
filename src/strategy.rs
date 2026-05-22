@@ -175,14 +175,28 @@ impl Strategy for AdaptiveEngine {
         let m01 = -k0 * raw_price_b;
         let m10 = -k1;
         let m11 = 1.0 - k1 * raw_price_b;
-        let new_p00 = m00 * self.p00 + m01 * self.p10;
-        let new_p01 = m00 * self.p01 + m01 * self.p11;
-        let new_p10 = m10 * self.p00 + m11 * self.p10;
-        let new_p11 = m10 * self.p01 + m11 * self.p11;
-        self.p00 = new_p00;
-        self.p01 = new_p01;
-        self.p10 = new_p10;
-        self.p11 = new_p11;
+
+        let mp00 = m00 * self.p00 + m01 * self.p10;
+        let mp01 = m00 * self.p01 + m01 * self.p11;
+        let mp10 = m10 * self.p00 + m11 * self.p10;
+        let mp11 = m10 * self.p01 + m11 * self.p11;
+
+        let mpmt00 = mp00 * m00 + mp01 * m01;
+        let mpmt01 = mp00 * m10 + mp01 * m11;
+        let mpmt10 = mp10 * m00 + mp11 * m01;
+        let mpmt11 = mp10 * m10 + mp11 * m11;
+
+        let raw_j_p00 = mpmt00 + k0 * k0 * dynamic_r;
+        let raw_j_p01 = mpmt01 + k0 * k1 * dynamic_r;
+        let raw_j_p10 = mpmt10 + k1 * k0 * dynamic_r;
+        let raw_j_p11 = mpmt11 + k1 * k1 * dynamic_r;
+
+        let symmetric_cross = 0.5 * (raw_j_p01 + raw_j_p10);
+
+        self.p00 = raw_j_p00;
+        self.p01 = symmetric_cross;
+        self.p10 = symmetric_cross;
+        self.p11 = raw_j_p11;
 
         // 2. Regret Matching with Virtual Positions
         let raw_spread = raw_price_a - raw_price_b;
