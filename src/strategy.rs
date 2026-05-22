@@ -38,8 +38,8 @@ pub struct AdaptiveEngine {
     q_alpha: f64,
     q_beta: f64,
     rolling_variance: f64,
-    innovation_history: VecDeque<f64>,
-    r_noise: f64,
+    rolling_mean: f64,
+    innovation_history: VecDeque<f64>,    r_noise: f64,
     z_threshold: f64,
     loss_toxic: f64,
     rolling_size_a: f64,
@@ -80,6 +80,7 @@ impl AdaptiveEngine {
             q_alpha: 0.00001,
             q_beta: 0.00001,
             rolling_variance: 0.01,
+            rolling_mean: 0.0,
             innovation_history: VecDeque::with_capacity(100),
             r_noise,
             z_threshold,
@@ -138,7 +139,9 @@ impl Strategy for AdaptiveEngine {
         let innovation = raw_price_a - (self.alpha + self.beta * raw_price_b);
         
         // EWMA Variance Tracking for Z-Score
-        self.rolling_variance = (self.rolling_variance * 0.995) + (innovation * innovation * 0.005);
+        self.rolling_mean = (self.rolling_mean * 0.995) + (innovation * 0.005);
+        let demeaned_innovation = innovation - self.rolling_mean;
+        self.rolling_variance = (self.rolling_variance * 0.995) + (demeaned_innovation * demeaned_innovation * 0.005);
         let statistical_std_dev = self.rolling_variance.sqrt().max(1e-6);
         let z = innovation / statistical_std_dev;
 
