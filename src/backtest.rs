@@ -36,18 +36,15 @@ pub fn run_backtest(quotes: Vec<HistoricalQuote>, pairs: &[(&str, &str)]) {
             let q_a = current_quotes.get(sym_a).unwrap();
             let q_b = current_quotes.get(sym_b).unwrap();
 
-            let (price_perspective_a, price_perspective_b) = if current_state == -1 {
-                (q_a.bid_price, q_b.ask_price)
-            } else {
-                (q_a.ask_price, q_b.bid_price)
-            };
+            let mid_a = (q_a.bid_price + q_a.ask_price) / 2.0;
+            let mid_b = (q_b.bid_price + q_b.ask_price) / 2.0;
 
             let action = engine.on_tick(
-                price_perspective_a,
-                price_perspective_b,
-                (q_a.ask_size + q_a.bid_size) / 2.0,
-                (q_b.ask_size + q_b.bid_size) / 2.0,
-                1, 1, 
+                mid_a,
+                mid_b,
+                0.0,
+                0.0,
+                0, 0, 
                 balance,
                 current_state
             );

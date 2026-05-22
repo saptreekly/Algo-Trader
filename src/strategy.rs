@@ -75,12 +75,12 @@ impl AdaptiveEngine {
         Self {
             alpha: 0.0,
             beta: 1.0,
-            p00: 0.001,
+            p00: 1e-6,
             p01: 0.0,
             p10: 0.0,
-            p11: 0.001,
-            q_alpha: 0.00001,
-            q_beta: 0.00001,
+            p11: 1e-6,
+            q_alpha: 1e-8,
+            q_beta: 1e-8,
             rolling_variance: 0.01,
             rolling_mean: 0.0,
             innovation_history: VecDeque::with_capacity(100),
@@ -107,7 +107,7 @@ impl AdaptiveEngine {
 
 impl Default for AdaptiveEngine {
     fn default() -> Self {
-        Self::with_parameters(0.01, 2.0, 0.05, 100.0, 0.1, 0.99)
+        Self::with_parameters(1.0, 2.0, 0.05, 100.0, 0.1, 0.99)
     }
 }
 
@@ -125,6 +125,10 @@ impl Strategy for AdaptiveEngine {
     ) -> Action {
         self.tick_count += 1;
         self.internal_state = current_position_state;
+
+        if self.tick_count == 1 && raw_price_b > 0.0 {
+            self.beta = raw_price_a / raw_price_b;
+        }
 
         if self.internal_state != 0 {
             self.ticks_in_trade += 1;
@@ -144,11 +148,9 @@ impl Strategy for AdaptiveEngine {
         let innovation = raw_price_a - (self.alpha + self.beta * raw_price_b);
         
         // EWMA Variance Tracking for Z-Score
-        if trades_a > 0 || trades_b > 0 {
-            self.rolling_mean = (self.rolling_mean * 0.995) + (innovation * 0.005);
-            let demeaned_innovation = innovation - self.rolling_mean;
-            self.rolling_variance = (self.rolling_variance * 0.995) + (demeaned_innovation * demeaned_innovation * 0.005);
-        }
+        self.rolling_mean = (self.rolling_mean * 0.999) + (innovation * 0.001);
+        let demeaned_innovation = innovation - self.rolling_mean;
+        self.rolling_variance = (self.rolling_variance * 0.999) + (demeaned_innovation * demeaned_innovation * 0.001);
         let statistical_std_dev = self.rolling_variance.sqrt().max(1e-6);
         let z = innovation / statistical_std_dev;
 
@@ -327,14 +329,16 @@ impl Strategy for AdaptiveEngine {
         let q = q.clamp(0.0, 1.0);
 
         if eu_agg <= 0.0 && eu_pass <= 0.0 {
-            let final_signal = if self.internal_state != 0 {
+            let final_signal = if self.internal_state != 0 && self.p_toxic_prior > 0.50 {
                 self.internal_state = 0;
                 Signal::Close
             } else {
                 Signal::Hold
             };
             self.prev_innovation = innovation;
-            return Action { signal: final_signal, size: 0.0, execution_slippage: 0.0 };
+            if final_signal == Signal::Close {
+                return Action { signal: final_signal, size: 0.0, execution_slippage: 0.0 };
+            }
         }
 
         let signal_result = match self.internal_state {
@@ -345,14 +349,24 @@ impl Strategy for AdaptiveEngine {
                 if self.ticks_in_trade > 600 || (self.ticks_in_trade > 5 && z <= -0.5) { self.internal_state = 0; Signal::Close } else { Signal::Hold }
             }
             _ => {
-                if self.innovation_history.len() >= 100 && variance_ratio > 0.75 {
+                if self.tick_count < 200 {
+                    Signal::Hold
+                } else if self.innovation_history.len() >= 100 && variance_ratio > 0.75 {
                     self.internal_state = 0;
                     Signal::Hold
-                } else if self.excursion_lock { Signal::Hold }
-                else if expected_reversion_payoff <= round_trip_cost * 1.2 { Signal::Hold }
-                else if z > self.z_threshold { self.internal_state = -1; Signal::Sell }
-                else if z < -self.z_threshold { self.internal_state = 1; Signal::Buy }
-                else { Signal::Hold }
+                } else if self.excursion_lock { 
+                    Signal::Hold 
+                } else if (2.0 * statistical_std_dev) <= round_trip_cost { 
+                    Signal::Hold 
+                } else if z > self.z_threshold { 
+                    self.internal_state = -1; 
+                    Signal::Sell 
+                } else if z < -self.z_threshold { 
+                    self.internal_state = 1; 
+                    Signal::Buy 
+                } else { 
+                    Signal::Hold 
+                }
             }
         };
 
