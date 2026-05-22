@@ -25,6 +25,7 @@ pub trait Strategy {
         trades_a: u64,
         trades_b: u64,
         account_balance: f64,
+        current_position_state: i8,
     ) -> Action;
 }
 
@@ -118,8 +119,10 @@ impl Strategy for AdaptiveEngine {
         trades_a: u64,
         trades_b: u64,
         account_balance: f64,
+        current_position_state: i8,
     ) -> Action {
         self.tick_count += 1;
+        self.internal_state = current_position_state;
 
         // Apply Process Noise
         self.p00 += self.q_alpha;
@@ -349,7 +352,6 @@ impl Strategy for AdaptiveEngine {
                 let fill_prob = if p_toxic < 0.3 { 0.4 } else { 0.85 };
                 if rand::random::<f64>() > fill_prob {
                     final_signal = Signal::Hold;
-                    self.internal_state = 0; // REVERT STATE
                     self.excursion_lock = true;
                 } else if p_toxic >= 0.3 {
                     slippage = 0.0001;

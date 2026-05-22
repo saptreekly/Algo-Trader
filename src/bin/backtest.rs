@@ -62,6 +62,12 @@ fn run_simulation(
             
             if let (Some(data_a), Some(data_b)) = (latest_prices.get(*a), latest_prices.get(*b)) {
                 let engine = registry.get_mut(&pair_key).unwrap();
+                let state = states.get_mut(&pair_key).unwrap();
+                let current_pos_i8 = match *state {
+                    PositionState::Flat => 0,
+                    PositionState::LongSpread { .. } => 1,
+                    PositionState::ShortSpread { .. } => -1,
+                };
                 let action = engine.on_tick(
                     data_a.0,
                     data_b.0,
@@ -70,6 +76,7 @@ fn run_simulation(
                     data_a.2,
                     data_b.2,
                     balances[&pair_key],
+                    current_pos_i8,
                 );
                 
                 let state = states.get_mut(&pair_key).unwrap();

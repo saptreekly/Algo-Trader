@@ -21,6 +21,7 @@ fn bench_on_tick(c: &mut Criterion) {
                 black_box(trades_a),
                 black_box(trades_b),
                 black_box(balance),
+                black_box(0),
             )
         })
     });

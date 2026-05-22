@@ -104,6 +104,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 }
 
                 let engine = registry.get_mut(&pair_key).unwrap();
+                let current_pos_i8 = match *state {
+                    PositionState::Flat => 0,
+                    PositionState::LongSpread { .. } => 1,
+                    PositionState::ShortSpread { .. } => -1,
+                };
                 let action = engine.on_tick(
                     raw_price_a,
                     raw_price_b,
@@ -112,6 +117,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     1,
                     1,
                     active_portfolio_balance,
+                    current_pos_i8,
                 );
 
                 if tick_counter % 4 == 0 {
