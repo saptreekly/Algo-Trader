@@ -8,16 +8,25 @@ use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 use serde_json::json;
 
 #[derive(Deserialize, Debug, Clone)]
-struct Trade {
-    p: f64,
-    s: f64,
-    t: String,
+struct Quote {
+    #[serde(rename = "bp")]
+    bid_price: f64,
+    #[allow(dead_code)]
+    #[serde(rename = "bs")]
+    bid_size: f64,
+    #[serde(rename = "ap")]
+    ask_price: f64,
+    #[allow(dead_code)]
+    #[serde(rename = "as")]
+    ask_size: f64,
+    #[serde(rename = "t")]
+    timestamp: String,
 }
 
 #[derive(Deserialize, Debug, Clone)]
 struct Snapshot {
-    #[serde(rename = "latestTrade")]
-    latest_trade: Trade,
+    #[serde(rename = "latestQuote")]
+    latest_quote: Quote,
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -75,7 +84,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     unique_symbols.insert("SPY");
 
     ws_stream.send(Message::Text(json!({
-        "action": "subscribe", "trades": unique_symbols
+        "action": "subscribe", "quotes": unique_symbols
     }).to_string().into())).await?;
 
     let mut active_portfolio_balance = 2500.0;
@@ -86,13 +95,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
         if let Message::Text(text) = msg {
             let data: Vec<serde_json::Value> = serde_json::from_str(&text)?;
             for event in data {
-                if event["t"] == "t" {
+                if event["t"] == "q" {
                     let symbol = event["S"].as_str().unwrap().to_string();
                     snapshots.insert(symbol.clone(), Snapshot {
-                        latest_trade: Trade {
-                            p: event["p"].as_f64().unwrap(),
-                            s: event["s"].as_f64().unwrap(),
-                            t: event["t"].as_str().unwrap().to_string(),
+                        latest_quote: Quote {
+                            bid_price: event["bp"].as_f64().unwrap(),
+                            bid_size: event["bs"].as_f64().unwrap(),
+                            ask_price: event["ap"].as_f64().unwrap(),
+                            ask_size: event["as"].as_f64().unwrap(),
+                            timestamp: event["t"].as_str().unwrap().to_string(),
                         }
                     });
                 }
@@ -116,27 +127,30 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 let state = states.get_mut(&pair_key).unwrap();
                 let last_ts = last_trade_timestamps.get_mut(&pair_key).unwrap();
 
-                let current_t_a = &snap_a.latest_trade.t;
-                let current_t_b = &snap_b.latest_trade.t;
+                let current_t_a = &snap_a.latest_quote.timestamp;
+                let current_t_b = &snap_b.latest_quote.timestamp;
 
-                let (trades_a, vol_a) = if current_t_a == &last_ts.0 { (0, 0.0) } else { last_ts.0 = current_t_a.clone(); (1, snap_a.latest_trade.s) };
-                let (trades_b, vol_b) = if current_t_b == &last_ts.1 { (0, 0.0) } else { last_ts.1 = current_t_b.clone(); (1, snap_b.latest_trade.s) };
+                let (trades_a, vol_a) = if current_t_a == &last_ts.0 { (0, 0.0) } else { last_ts.0 = current_t_a.clone(); (1, snap_a.latest_quote.ask_size) };
+                let (trades_b, vol_b) = if current_t_b == &last_ts.1 { (0, 0.0) } else { last_ts.1 = current_t_b.clone(); (1, snap_b.latest_quote.ask_size) };
 
-                let raw_price_a = snap_a.latest_trade.p;
-                let raw_price_b = snap_b.latest_trade.p;
-                let current_spread = raw_price_a - raw_price_b;
+                let (price_a, price_b) = match *state {
+                    PositionState::ShortSpread { .. } => (snap_a.latest_quote.bid_price, snap_b.latest_quote.ask_price),
+                    _ => (snap_a.latest_quote.ask_price, snap_b.latest_quote.bid_price),
+                };
+                
+                let current_spread = price_a - price_b;
                 
                 let mut short_leg_value = 0.0;
                 match *state {
-                    PositionState::LongSpread { entry_size, .. } => { short_leg_value = raw_price_b * entry_size.max(100.0); }
-                    PositionState::ShortSpread { entry_size, .. } => { short_leg_value = raw_price_a * entry_size.max(100.0); }
+                    PositionState::LongSpread { entry_size, .. } => { short_leg_value = snap_b.latest_quote.bid_price * entry_size.max(100.0); }
+                    PositionState::ShortSpread { entry_size, .. } => { short_leg_value = snap_a.latest_quote.ask_price * entry_size.max(100.0); }
                     _ => {}
                 }
                 
                 if short_leg_value > 0.0 { active_portfolio_balance -= short_leg_value * (ANNUAL_BORROW_RATE / 3_931_200.0); }
 
                 let action = registry.get_mut(&pair_key).unwrap().on_tick(
-                    raw_price_a, raw_price_b, vol_a, vol_b, trades_a, trades_b, available_free_cash,
+                    price_a, price_b, vol_a, vol_b, trades_a, trades_b, available_free_cash,
                     match *state { PositionState::Flat => 0, PositionState::LongSpread { .. } => 1, PositionState::ShortSpread { .. } => -1 }
                 );
 
@@ -146,16 +160,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     Signal::Buy => {
                         if let PositionState::Flat = *state {
                             if action.size > 0.0 {
-                                active_portfolio_balance -= action.execution_slippage * (raw_price_a + raw_price_b) * action.size;
-                                *state = PositionState::LongSpread { entry_spread: current_spread, entry_size: action.size, locked_margin: 0.5 * ((action.size * raw_price_a) + (action.size * raw_price_b)) };
+                                active_portfolio_balance -= action.execution_slippage * (price_a + price_b) * action.size;
+                                *state = PositionState::LongSpread { entry_spread: current_spread, entry_size: action.size, locked_margin: 0.5 * ((action.size * price_a) + (action.size * price_b)) };
                             }
                         }
                     }
                     Signal::Sell => {
                         if let PositionState::Flat = *state {
                             if action.size > 0.0 {
-                                active_portfolio_balance -= action.execution_slippage * (raw_price_a + raw_price_b) * action.size;
-                                *state = PositionState::ShortSpread { entry_spread: current_spread, entry_size: action.size, locked_margin: 0.5 * ((action.size * raw_price_a) + (action.size * raw_price_b)) };
+                                active_portfolio_balance -= action.execution_slippage * (price_a + price_b) * action.size;
+                                *state = PositionState::ShortSpread { entry_spread: current_spread, entry_size: action.size, locked_margin: 0.5 * ((action.size * price_a) + (action.size * price_b)) };
                             }
                         }
                     }
@@ -163,14 +177,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         match *state {
                             PositionState::LongSpread { entry_spread, entry_size, .. } => {
                                 let pnl = (current_spread - entry_spread) * entry_size;
-                                let slippage_cost = action.execution_slippage * (raw_price_a + raw_price_b) * entry_size;
+                                let slippage_cost = action.execution_slippage * (price_a + price_b) * entry_size;
                                 active_portfolio_balance += pnl - slippage_cost;
                                 println!("CLOSING LONG SPREAD {} | PnL: {:.2} | Slippage: {:.2} | Balance: {:.2}", pair_key, pnl, slippage_cost, active_portfolio_balance);
                                 *state = PositionState::Flat;
                             }
                             PositionState::ShortSpread { entry_spread, entry_size, .. } => {
                                 let pnl = (entry_spread - current_spread) * entry_size;
-                                let slippage_cost = action.execution_slippage * (raw_price_a + raw_price_b) * entry_size;
+                                let slippage_cost = action.execution_slippage * (price_a + price_b) * entry_size;
                                 active_portfolio_balance += pnl - slippage_cost;
                                 println!("CLOSING SHORT SPREAD {} | PnL: {:.2} | Slippage: {:.2} | Balance: {:.2}", pair_key, pnl, slippage_cost, active_portfolio_balance);
                                 *state = PositionState::Flat;

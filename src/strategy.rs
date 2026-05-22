@@ -128,23 +128,9 @@ impl Strategy for AdaptiveEngine {
         self.p00 += self.q_alpha;
         self.p11 += self.q_beta;
 
-        let initial_margin_rate = 0.50; // Standard 50% Regulation T Requirement
-        let short_order_cushion = 1.03; // Alpaca's mandatory 3% short premium check
-        let safety_buffer = 0.98;       // 2% cash cushion
-
-        let max_shares = match self.internal_state {
-            1 => { // Buy (Long Spread: Long A, Short B)
-                let denominator = (initial_margin_rate * raw_price_a) + (initial_margin_rate * raw_price_b * self.beta.abs() * short_order_cushion);
-                if denominator > 0.0 { (account_balance * safety_buffer) / denominator } else { 0.0 }
-            },
-            -1 => { // Sell (Short Spread: Short A, Long B)
-                let denominator = (initial_margin_rate * raw_price_a * short_order_cushion) + (initial_margin_rate * raw_price_b * self.beta.abs());
-                if denominator > 0.0 { (account_balance * safety_buffer) / denominator } else { 0.0 }
-            },
-            _ => 0.0
-        };
-        // If flat, we don't have a specific sizing yet, but we must proceed to check signals!
-        // The signal logic will determine the size when it enters a position.
+        // Apply Process Noise
+        self.p00 += self.q_alpha;
+        self.p11 += self.q_beta;
 
         // 1. Kalman Filter Update
         let innovation = raw_price_a - (self.alpha + self.beta * raw_price_b);
@@ -322,11 +308,6 @@ impl Strategy for AdaptiveEngine {
         let payoff_pass_noise = (expected_reversion_payoff * 0.8) - adjusted_passive_friction - min_borrow_fee_drag;
         let payoff_pass_toxic = -effective_loss_toxic - adjusted_passive_friction - min_borrow_fee_drag;
 
-        let _market_payoff_agg_noise = -payoff_agg_noise;
-        let _market_payoff_agg_toxic = -payoff_agg_toxic;
-        let _market_payoff_pass_noise = -payoff_pass_noise;
-        let _market_payoff_pass_toxic = -payoff_pass_toxic;
-
         let eu_agg = p_toxic * payoff_agg_toxic + (1.0 - p_toxic) * payoff_agg_noise;
         let eu_pass = p_toxic * payoff_pass_toxic + (1.0 - p_toxic) * payoff_pass_noise;
 
@@ -357,6 +338,22 @@ impl Strategy for AdaptiveEngine {
                 else if z < -self.z_threshold { self.internal_state = 1; Signal::Buy }
                 else { Signal::Hold }
             }
+        };
+
+        let initial_margin_rate = 0.50;
+        let short_order_cushion = 1.03;
+        let safety_buffer = 0.98;
+
+        let max_shares = match signal_result {
+            Signal::Buy => {
+                let denominator = (initial_margin_rate * raw_price_a) + (initial_margin_rate * raw_price_b * self.beta.abs() * short_order_cushion);
+                if denominator > 0.0 { (account_balance * safety_buffer) / denominator } else { 0.0 }
+            },
+            Signal::Sell => {
+                let denominator = (initial_margin_rate * raw_price_a * short_order_cushion) + (initial_margin_rate * raw_price_b * self.beta.abs());
+                if denominator > 0.0 { (account_balance * safety_buffer) / denominator } else { 0.0 }
+            },
+            _ => 0.0
         };
 
         let mut final_signal = signal_result;

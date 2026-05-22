@@ -85,20 +85,24 @@ fn run_simulation(
                 
                 match (*state, action.signal) {
                     (PositionState::Flat, Signal::Buy) => {
-                        *state = PositionState::LongSpread;
-                        *trades += 1;
-                        entry_spreads.insert(pair_key.clone(), data_a.0 - data_b.0);
+                        if action.size > 0.0 {
+                            *state = PositionState::LongSpread;
+                            *trades += 1;
+                            entry_spreads.insert(pair_key.clone(), data_a.0 - data_b.0);
+                        }
                     }
                     (PositionState::Flat, Signal::Sell) => {
-                        *state = PositionState::ShortSpread;
-                        *trades += 1;
-                        entry_spreads.insert(pair_key.clone(), data_a.0 - data_b.0);
+                        if action.size > 0.0 {
+                            *state = PositionState::ShortSpread;
+                            *trades += 1;
+                            entry_spreads.insert(pair_key.clone(), data_a.0 - data_b.0);
+                        }
                     }
                     (PositionState::LongSpread, Signal::Close) => {
                         let entry_spread = entry_spreads[&pair_key];
+                        // Sizing logic: action.size is returned by engine
                         let pnl = ((data_a.0 - data_b.0) - entry_spread) * action.size;
                         
-                        // Realistic costs: 0.0001 per share commission + wide slippage
                         let commission = action.size * 0.0002;
                         let slippage = 0.0003 * (data_a.0 + data_b.0) * action.size;
                         *balance += pnl - slippage - commission;
