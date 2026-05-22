@@ -19,10 +19,10 @@ struct Snapshot {
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
-enum PositionState {
+pub enum PositionState {
     Flat,
-    LongSpread { entry_spread: f64 },
-    ShortSpread { entry_spread: f64 },
+    LongSpread { entry_spread: f64, entry_size: f64, locked_margin: f64 },
+    ShortSpread { entry_spread: f64, entry_size: f64, locked_margin: f64 },
 }
 
 const PAIRS: &[(&str, &str)] = &[
@@ -80,6 +80,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
         tick_counter += 1;
 
+        let mut total_locked_margin = 0.0;
+        for state in states.values() {
+            match *state {
+                PositionState::LongSpread { locked_margin, .. } => total_locked_margin += locked_margin,
+                PositionState::ShortSpread { locked_margin, .. } => total_locked_margin += locked_margin,
+                PositionState::Flat => {}
+            }
+        }
+        let available_free_cash = (active_portfolio_balance - total_locked_margin).max(0.0);
+
         for (a, b) in PAIRS {
             let pair_key = format!("{}_{}", a, b);
             
@@ -93,12 +103,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 // Borrow cost calculation
                 let mut short_leg_value = 0.0;
                 match *state {
-                    PositionState::LongSpread { .. } => {
-                        let fee_shares = 100.0; // Assume action.size >= 100.0 or handle with actual size if tracked
+                    PositionState::LongSpread { entry_size, .. } => {
+                        let fee_shares = entry_size.max(100.0);
                         short_leg_value = raw_price_b * fee_shares;
                     }
-                    PositionState::ShortSpread { .. } => {
-                        let fee_shares = 100.0;
+                    PositionState::ShortSpread { entry_size, .. } => {
+                        let fee_shares = entry_size.max(100.0);
                         short_leg_value = raw_price_a * fee_shares;
                     }
                     _ => {}
@@ -122,7 +132,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     snap_b.latest_trade.s,
                     1,
                     1,
-                    active_portfolio_balance,
+                    available_free_cash,
                     current_pos_i8,
                 );
 
@@ -136,8 +146,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             if action.size > 0.0 {
                                 let total_slippage_cost = action.execution_slippage * (raw_price_a + raw_price_b) * action.size;
                                 active_portfolio_balance -= total_slippage_cost;
+                                
+                                let initial_margin_rate = 0.50;
+                                let margin_requirement = initial_margin_rate * ((action.size * raw_price_a) + (action.size * raw_price_b));
+                                
                                 println!("OPENING LONG SPREAD {} | SIGNAL: {:?}", pair_key, action.signal);
-                                *state = PositionState::LongSpread { entry_spread: current_spread };
+                                *state = PositionState::LongSpread { entry_spread: current_spread, entry_size: action.size, locked_margin: margin_requirement };
                             }
                         }
                     }
@@ -146,21 +160,25 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             if action.size > 0.0 {
                                 let total_slippage_cost = action.execution_slippage * (raw_price_a + raw_price_b) * action.size;
                                 active_portfolio_balance -= total_slippage_cost;
+                                
+                                let initial_margin_rate = 0.50;
+                                let margin_requirement = initial_margin_rate * ((action.size * raw_price_a) + (action.size * raw_price_b));
+                                
                                 println!("OPENING SHORT SPREAD {} | SIGNAL: {:?}", pair_key, action.signal);
-                                *state = PositionState::ShortSpread { entry_spread: current_spread };
+                                *state = PositionState::ShortSpread { entry_spread: current_spread, entry_size: action.size, locked_margin: margin_requirement };
                             }
                         }
                     }
                     Signal::Close => {
                         match *state {
-                            PositionState::LongSpread { entry_spread } => {
+                            PositionState::LongSpread { entry_spread, .. } => {
                                 let pnl = (current_spread - entry_spread) * action.size;
                                 let slippage_cost = action.execution_slippage * (raw_price_a + raw_price_b) * action.size;
                                 active_portfolio_balance += pnl - slippage_cost;
                                 println!("CLOSING LONG SPREAD {} | PnL: {:.2} | Slippage: {:.2} | Balance: {:.2}", pair_key, pnl, slippage_cost, active_portfolio_balance);
                                 *state = PositionState::Flat;
                             }
-                            PositionState::ShortSpread { entry_spread } => {
+                            PositionState::ShortSpread { entry_spread, .. } => {
                                 let pnl = (entry_spread - current_spread) * action.size;
                                 let slippage_cost = action.execution_slippage * (raw_price_a + raw_price_b) * action.size;
                                 active_portfolio_balance += pnl - slippage_cost;
