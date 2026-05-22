@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1779416935716,
+  "lastUpdate": 1779417303873,
   "repoUrl": "https://github.com/saptreekly/Algo-Trader",
   "entries": {
     "Benchmark": [
@@ -269,6 +269,36 @@ window.BENCHMARK_DATA = {
             "name": "on_tick_performance",
             "value": 8,
             "range": "± 0",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "jweekly201@gmail.com",
+            "name": "saptreekly",
+            "username": "saptreekly"
+          },
+          "committer": {
+            "email": "jweekly201@gmail.com",
+            "name": "saptreekly",
+            "username": "saptreekly"
+          },
+          "distinct": true,
+          "id": "5f0a28d2c2b76a64d5423b90955226279c778a07",
+          "message": "feat: re-engineer infrastructure for low-latency streaming and institutional-grade risk management",
+          "timestamp": "2026-05-22T14:34:31+12:00",
+          "tree_id": "26d56fc478ca057fd219c914ef1e711b21c33d85",
+          "url": "https://github.com/saptreekly/Algo-Trader/commit/5f0a28d2c2b76a64d5423b90955226279c778a07"
+        },
+        "date": 1779417303860,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "on_tick_performance",
+            "value": 257,
+            "range": "± 1",
             "unit": "ns/iter"
           }
         ]
