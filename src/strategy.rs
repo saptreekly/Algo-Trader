@@ -301,10 +301,12 @@ impl Strategy for AdaptiveEngine {
 
         let passive_friction = friction_cost * 0.5;
 
-        let payoff_agg_noise = expected_reversion_payoff - friction_cost;
-        let payoff_agg_toxic = (expected_reversion_payoff * 0.2) - (effective_loss_toxic * 0.5) - friction_cost;
-        let payoff_pass_noise = (expected_reversion_payoff * 0.8) - passive_friction;
-        let payoff_pass_toxic = -effective_loss_toxic - passive_friction;
+        let min_borrow_fee_drag = 100.0 * (raw_price_a.max(raw_price_b)) * (0.010 / 3_931_200.0);
+
+        let payoff_agg_noise = expected_reversion_payoff - friction_cost - min_borrow_fee_drag;
+        let payoff_agg_toxic = (expected_reversion_payoff * 0.2) - (effective_loss_toxic * 0.5) - friction_cost - min_borrow_fee_drag;
+        let payoff_pass_noise = (expected_reversion_payoff * 0.8) - passive_friction - min_borrow_fee_drag;
+        let payoff_pass_toxic = -effective_loss_toxic - passive_friction - min_borrow_fee_drag;
 
         let _market_payoff_agg_noise = -payoff_agg_noise;
         let _market_payoff_agg_toxic = -payoff_agg_toxic;

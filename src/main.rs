@@ -60,7 +60,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     println!("Starting high-frequency trading loop...");
 
     let mut tick_counter: u64 = 0;
-    let mut active_portfolio_balance = 100.0;
+    let mut active_portfolio_balance = 2500.0;
 
     loop {
         let response = client
@@ -93,8 +93,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 // Borrow cost calculation
                 let mut short_leg_value = 0.0;
                 match *state {
-                    PositionState::LongSpread { entry_spread: _ } => { short_leg_value = raw_price_b; }
-                    PositionState::ShortSpread { entry_spread: _ } => { short_leg_value = raw_price_a; }
+                    PositionState::LongSpread { .. } => {
+                        let fee_shares = 100.0; // Assume action.size >= 100.0 or handle with actual size if tracked
+                        short_leg_value = raw_price_b * fee_shares;
+                    }
+                    PositionState::ShortSpread { .. } => {
+                        let fee_shares = 100.0;
+                        short_leg_value = raw_price_a * fee_shares;
+                    }
                     _ => {}
                 }
                 
