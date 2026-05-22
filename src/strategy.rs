@@ -92,7 +92,7 @@ impl AdaptiveEngine {
             p_toxic_prior: p_toxic_baseline,
             p_toxic_baseline,
             decay_rate,
-            candidate_thresholds: [2.0, 2.5, 3.0, 3.5, 4.0],
+            candidate_thresholds: [1.5, 2.0, 2.5, 3.0, 3.5],
             regrets: [0.0; 5],
             virtual_states: [0; 5],
             virtual_entries: [0.0; 5],
@@ -107,7 +107,7 @@ impl AdaptiveEngine {
 
 impl Default for AdaptiveEngine {
     fn default() -> Self {
-        Self::with_parameters(0.01, 2.5, 0.05, 100.0, 0.1, 0.99)
+        Self::with_parameters(0.01, 2.0, 0.05, 100.0, 0.1, 0.99)
     }
 }
 
@@ -327,24 +327,29 @@ impl Strategy for AdaptiveEngine {
         let q = q.clamp(0.0, 1.0);
 
         if eu_agg <= 0.0 && eu_pass <= 0.0 {
-            self.internal_state = 0;
+            let final_signal = if self.internal_state != 0 {
+                self.internal_state = 0;
+                Signal::Close
+            } else {
+                Signal::Hold
+            };
             self.prev_innovation = innovation;
-            return Action { signal: Signal::Hold, size: 0.0, execution_slippage: 0.0 };
+            return Action { signal: final_signal, size: 0.0, execution_slippage: 0.0 };
         }
 
         let signal_result = match self.internal_state {
             1 => {
-                if self.ticks_in_trade > 5 && z >= 0.5 { self.internal_state = 0; Signal::Close } else { Signal::Hold }
+                if self.ticks_in_trade > 600 || (self.ticks_in_trade > 5 && z >= 0.5) { self.internal_state = 0; Signal::Close } else { Signal::Hold }
             }
             -1 => {
-                if self.ticks_in_trade > 5 && z <= -0.5 { self.internal_state = 0; Signal::Close } else { Signal::Hold }
+                if self.ticks_in_trade > 600 || (self.ticks_in_trade > 5 && z <= -0.5) { self.internal_state = 0; Signal::Close } else { Signal::Hold }
             }
             _ => {
                 if self.innovation_history.len() >= 100 && variance_ratio > 0.75 {
                     self.internal_state = 0;
                     Signal::Hold
                 } else if self.excursion_lock { Signal::Hold }
-                else if expected_reversion_payoff <= round_trip_cost * 1.5 { Signal::Hold }
+                else if expected_reversion_payoff <= round_trip_cost * 1.2 { Signal::Hold }
                 else if z > self.z_threshold { self.internal_state = -1; Signal::Sell }
                 else if z < -self.z_threshold { self.internal_state = 1; Signal::Buy }
                 else { Signal::Hold }

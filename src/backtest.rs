@@ -23,7 +23,10 @@ pub fn run_backtest(quotes: Vec<HistoricalQuote>, pairs: &[(&str, &str)]) {
         let mut wtr = Writer::from_path(log_filename).unwrap();
         wtr.write_record(&["Entry Time", "Exit Time", "Side", "Entry Spread", "Exit Spread", "Size", "PnL"]).unwrap();
 
-        for quote in quotes.iter().filter(|q| q.symbol == sym_a || q.symbol == sym_b) {
+        let mut pair_quotes: Vec<&HistoricalQuote> = quotes.iter().filter(|q| q.symbol == sym_a || q.symbol == sym_b).collect();
+        pair_quotes.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
+
+        for quote in pair_quotes {
             current_quotes.insert(quote.symbol.clone(), quote.clone());
 
             if current_quotes.len() < 2 {
@@ -33,11 +36,15 @@ pub fn run_backtest(quotes: Vec<HistoricalQuote>, pairs: &[(&str, &str)]) {
             let q_a = current_quotes.get(sym_a).unwrap();
             let q_b = current_quotes.get(sym_b).unwrap();
 
-            let spread_price = q_a.ask_price - q_b.bid_price; 
+            let (price_perspective_a, price_perspective_b) = if current_state == -1 {
+                (q_a.bid_price, q_b.ask_price)
+            } else {
+                (q_a.ask_price, q_b.bid_price)
+            };
 
             let action = engine.on_tick(
-                q_a.ask_price,
-                q_b.bid_price,
+                price_perspective_a,
+                price_perspective_b,
                 (q_a.ask_size + q_a.bid_size) / 2.0,
                 (q_b.ask_size + q_b.bid_size) / 2.0,
                 1, 1, 
@@ -47,26 +54,30 @@ pub fn run_backtest(quotes: Vec<HistoricalQuote>, pairs: &[(&str, &str)]) {
 
             match action.signal {
                 Signal::Buy if action.size > 0.0 => {
+                    entry_price = q_a.ask_price - q_b.bid_price;
                     let cost = (q_a.ask_price + q_b.bid_price) * action.size * action.execution_slippage;
                     balance -= cost;
-                    entry_price = spread_price;
                     entry_size = action.size;
-                    entry_time = q_a.timestamp.clone();
+                    entry_time = quote.timestamp.clone();
                     total_trades += 1;
                     current_state = 1;
                 }
                 Signal::Sell if action.size > 0.0 => {
-                    let cost = (q_a.ask_price + q_b.bid_price) * action.size * action.execution_slippage;
+                    entry_price = q_a.bid_price - q_b.ask_price;
+                    let cost = (q_a.bid_price + q_b.ask_price) * action.size * action.execution_slippage;
                     balance -= cost;
-                    entry_price = spread_price;
                     entry_size = action.size;
-                    entry_time = q_a.timestamp.clone();
+                    entry_time = quote.timestamp.clone();
                     total_trades += 1;
                     current_state = -1;
                 }
                 Signal::Close if current_state != 0 => {
-                    let exit_price = spread_price;
-                    let exit_time = q_a.timestamp.clone();
+                    let exit_price = if current_state == 1 {
+                        q_a.bid_price - q_b.ask_price
+                    } else {
+                        q_a.ask_price - q_b.bid_price
+                    };
+                    let exit_time = quote.timestamp.clone();
                     let side = if current_state == 1 { "Long" } else { "Short" };
                     let pnl = if current_state == 1 {
                         (exit_price - entry_price) * entry_size
@@ -74,7 +85,7 @@ pub fn run_backtest(quotes: Vec<HistoricalQuote>, pairs: &[(&str, &str)]) {
                         (entry_price - exit_price) * entry_size
                     };
                     
-                    balance += pnl - (exit_price * entry_size * action.execution_slippage);
+                    balance += pnl - (exit_price.abs() * entry_size * action.execution_slippage);
                     pnl_list.push(pnl);
                     
                     wtr.write_record(&[
