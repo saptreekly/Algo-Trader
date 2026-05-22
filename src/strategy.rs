@@ -128,12 +128,24 @@ impl Strategy for AdaptiveEngine {
         self.p00 += self.q_alpha;
         self.p11 += self.q_beta;
 
-        let available_buying_power = account_balance * 2.0;
-        let max_shares = (available_buying_power / 2.0) / (raw_price_a + raw_price_b);
-        let position_value = max_shares * (raw_price_a + raw_price_b);
+        let initial_margin_rate = 0.50; // Standard 50% Regulation T Requirement
+        let short_order_cushion = 1.03; // Alpaca's mandatory 3% short premium check
+        let safety_buffer = 0.98;       // 2% cash cushion
 
-        if position_value < 1.0 {
-            self.internal_state = 0;
+        let mut max_shares = 0.0;
+        match self.internal_state {
+            1 => { // Buy (Long Spread: Long A, Short B)
+                let denominator = (initial_margin_rate * raw_price_a) + (initial_margin_rate * raw_price_b * short_order_cushion);
+                max_shares = if denominator > 0.0 { (account_balance * safety_buffer) / denominator } else { 0.0 };
+            },
+            -1 => { // Sell (Short Spread: Short A, Long B)
+                let denominator = (initial_margin_rate * raw_price_a * short_order_cushion) + (initial_margin_rate * raw_price_b);
+                max_shares = if denominator > 0.0 { (account_balance * safety_buffer) / denominator } else { 0.0 };
+            },
+            _ => { max_shares = 0.0; }
+        }
+
+        if max_shares < 1.0 {
             self.prev_innovation = 0.0;
             return Action { signal: Signal::Hold, size: 0.0, execution_slippage: 0.0 };
         }
