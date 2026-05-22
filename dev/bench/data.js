@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1779418118568,
+  "lastUpdate": 1779418758020,
   "repoUrl": "https://github.com/saptreekly/Algo-Trader",
   "entries": {
     "Benchmark": [
@@ -329,6 +329,36 @@ window.BENCHMARK_DATA = {
             "name": "on_tick_performance",
             "value": 268,
             "range": "± 2",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "jweekly201@gmail.com",
+            "name": "saptreekly",
+            "username": "saptreekly"
+          },
+          "committer": {
+            "email": "jweekly201@gmail.com",
+            "name": "saptreekly",
+            "username": "saptreekly"
+          },
+          "distinct": true,
+          "id": "d6f99636ebf7339b3a4a67e1585a3d38b382e68a",
+          "message": "latest",
+          "timestamp": "2026-05-22T14:58:44+12:00",
+          "tree_id": "1c17130bb080ce12b4a69e91fa747ae0983d6d8e",
+          "url": "https://github.com/saptreekly/Algo-Trader/commit/d6f99636ebf7339b3a4a67e1585a3d38b382e68a"
+        },
+        "date": 1779418758007,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "on_tick_performance",
+            "value": 264,
+            "range": "± 8",
             "unit": "ns/iter"
           }
         ]
