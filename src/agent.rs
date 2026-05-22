@@ -1,6 +1,5 @@
-use crate::model::QNetwork;
-
 pub struct DQNAgent<M> {
+    #[allow(dead_code)]
     pub model: M,
 }
 
@@ -9,10 +8,7 @@ impl<M> DQNAgent<M> {
         Self { model }
     }
 
-    pub fn act(&self, _state: &Vec<f32>) -> usize {
+    pub fn act(&self, _state: &[f32]) -> usize {
         0
-    }
-
-    pub fn train_step(&mut self) {
     }
 }
