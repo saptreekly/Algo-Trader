@@ -206,6 +206,21 @@ impl Strategy for AdaptiveEngine {
         let friction_cost = 0.00015;
 
         for (i, &cand_z) in self.candidate_thresholds.iter().enumerate() {
+            let mut floating_pnl = 0.0;
+            match self.virtual_states[i] {
+                1 => { floating_pnl = raw_spread - self.virtual_entries[i]; }
+                -1 => { floating_pnl = self.virtual_entries[i] - raw_spread; }
+                _ => {}
+            }
+
+            // Path-dependent regret update
+            let active_floating_pnl = if self.internal_state != 0 {
+                if self.internal_state == 1 { raw_spread - self.prev_innovation } else { self.prev_innovation - raw_spread }
+            } else { 0.0 };
+            
+            self.regrets[i] += floating_pnl - active_floating_pnl;
+            self.regrets[i] = self.regrets[i].max(0.0);
+
             match self.virtual_states[i] {
                 0 => {
                     if z > cand_z {
@@ -218,21 +233,18 @@ impl Strategy for AdaptiveEngine {
                 }
                 1 => { // Long
                     if z >= 0.0 {
-                        let realized_pnl = raw_spread - self.virtual_entries[i];
-                        self.regrets[i] += realized_pnl - friction_cost;
+                        self.regrets[i] += (raw_spread - self.virtual_entries[i]) - friction_cost;
                         self.virtual_states[i] = 0;
                     }
                 }
                 -1 => { // Short
                     if z <= 0.0 {
-                        let realized_pnl = self.virtual_entries[i] - raw_spread;
-                        self.regrets[i] += realized_pnl - friction_cost;
+                        self.regrets[i] += (self.virtual_entries[i] - raw_spread) - friction_cost;
                         self.virtual_states[i] = 0;
                     }
                 }
                 _ => {}
             }
-            self.regrets[i] = self.regrets[i].max(0.0);
         }
 
         // Periodic update
@@ -291,21 +303,19 @@ impl Strategy for AdaptiveEngine {
         let payoff_pass_noise = (expected_reversion_payoff * 0.8) - passive_friction;
         let payoff_pass_toxic = -effective_loss_toxic - passive_friction;
 
-        let market_payoff_agg_noise = -payoff_agg_noise;
-        let market_payoff_agg_toxic = -payoff_agg_toxic;
-        let market_payoff_pass_noise = -payoff_pass_noise;
-        let market_payoff_pass_toxic = -payoff_pass_toxic;
+        let _market_payoff_agg_noise = -payoff_agg_noise;
+        let _market_payoff_agg_toxic = -payoff_agg_toxic;
+        let _market_payoff_pass_noise = -payoff_pass_noise;
+        let _market_payoff_pass_toxic = -payoff_pass_toxic;
 
         let eu_agg = p_toxic * payoff_agg_toxic + (1.0 - p_toxic) * payoff_agg_noise;
         let eu_pass = p_toxic * payoff_pass_toxic + (1.0 - p_toxic) * payoff_pass_noise;
 
-        let denominator = market_payoff_agg_toxic - market_payoff_pass_toxic - market_payoff_agg_noise + market_payoff_pass_noise;
-        let q = if denominator.abs() > 1e-9 {
-            (market_payoff_pass_noise - market_payoff_pass_toxic) / denominator
-        } else {
-            0.5
-        };
+        let num = payoff_pass_noise - payoff_pass_toxic;
+        let den = payoff_pass_noise - payoff_pass_toxic - payoff_agg_noise + payoff_agg_toxic;
+        let q = if den.abs() > 1e-9 { num / den } else { 0.5 };
         let q = q.clamp(0.0, 1.0);
+
         if eu_agg <= 0.0 && eu_pass <= 0.0 {
             self.internal_state = 0;
             self.prev_innovation = innovation;
@@ -334,7 +344,8 @@ impl Strategy for AdaptiveEngine {
         let mut slippage = 0.0;
         
         if signal_result != Signal::Hold && signal_result != Signal::Close {
-            if q <= 0.5 { // Passive attempt
+            let execute_aggressively = rand::random::<f64>() < q;
+            if !execute_aggressively { // Passive limit order attempt
                 let fill_prob = if p_toxic < 0.3 { 0.4 } else { 0.85 };
                 if rand::random::<f64>() > fill_prob {
                     final_signal = Signal::Hold;
